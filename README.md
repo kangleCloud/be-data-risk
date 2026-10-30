@@ -20,6 +20,21 @@ python3 -m venv .venv
 
 ## 配置和服务入口
 
+支持显式加载 `.env.dev`、`.env.prod`、`.env` 或原 JSON 配置。按 `be-data-analysis` 的分组风格使用：
+
+```sh
+cp .env.example .env.dev
+# 编辑 .env.dev，填写日志源、密钥文件及实际 Redis 连接
+.venv/bin/python -m risk --config .env.dev
+```
+
+`.env.example` 分为 Redis、日志源、隐私、可信代理、文件读取和可选分组。Redis 使用 `REDIS_URL`（仅主机名）、`REDIS_PASSWORD`、`REDIS_PORT`、`REDIS_DB` 分开配置，默认 `localhost:6379/2`；密码由程序自动 URL 编码，可选 `REDIS_USERNAME` 支持 ACL。日志路径默认空，启动前会拒绝空来源，不连接Redis。单源使用 `SOURCE_ID` + `SOURCE_LOG_PATH`，可信代理用逗号分隔的 `TRUSTED_PROXIES`。
+
+只支持单行赋值、注释、单/双引号，不执行shell、不插值、不自动从进程环境覆盖文件；布尔值为 `true/false`。含空格或 `#` 的字符串必须加引号。由 `--config` 选文件，不添加 `APP_ENV`。`.env`/`.env.dev`/`.env.prod`均被Git忽略，不覆盖已有私有文件。迁移工具同样支持 `--config .env.dev`。
+
+原 `RISK_*` 命名和JSON配置继续兼容；需 `rediss://`/`unix://` 或完整URI时使用原 `RISK_REDIS_URL`，不能与分开的 `REDIS_*` 同填。同一项新旧名字冲突时明确拒绝。多源仍可使用 `RISK_SOURCES` JSON数组替代单源路径；高级 `PATH_RULES` 仍用单引号包裹JSON。
+
+
 复制 `examples/config.example.json` 为 Git 忽略的 `config.local.json`。默认源列表和 Redis 地址为空，不自动连接任何服务器。按已核实的配置填写：
 
 | 配置 | 含义 |
@@ -44,6 +59,14 @@ python3 -m venv .venv
 正常运行持续采集；已有 `--once` 仅用于本地/隔离验收，处理当前完整行后提交缓冲退出，不创建业务API或jobId。SIGTERM/SIGINT停止读取后尽力提交剩余缓冲，租约或Redis不可用则不冒充成功；以token比较释放lease。Redis暂时不可用保留待提交段重试，其他协议冲突安全停止，不重造批次盲试。
 
 专用用户只读日志；私有配置和密钥仅服务用户可读。模板所有生产用户/目录/配置路径保持占位，需运维核实systemd隔离可见性。未配置密钥时不生成SOURCE，可信IP计KEY_UNAVAILABLE，批次keyId固定unavailable；同日启用/换key将明确冲突，不能静默改变。
+
+## systemd 生产配置
+
+文件：`deploy/systemd/be-data-risk.service`，按所提供的be-data-analysis服务配置生成。项目目录为 `/data/content/be-data-risk`，日志为 `/data/logs/be-data-risk/service.log`；这两个路径按参考目录替换项目名，部署前需在目标机确认。
+
+服务使用root用户、网络就绪后启动、失败5秒重启，SIGTERM停止最多等待60秒。入口为 `.venv/bin/python -m risk --config /data/content/be-data-risk/.env.prod`；本项目通过显式配置文件选生产环境，不设置APP_ENV。保留Python无缓冲输出与统一文件日志。
+
+安装前准备项目 `.venv`/依赖、填写 `.env.prod` 的真实Redis/日志源/密钥路径，并创建可写的 `/data/logs/be-data-risk` 目录；systemd不会替你创建该父目录。源日志只读、私有配置与密钥权限需核实。此文件仅生成，未复制到 `/etc/systemd/system`、未启动或部署；本机没有systemd-analyze，目标Linux上需执行 `systemd-analyze verify deploy/systemd/be-data-risk.service` 核验。
 
 ## 不可变发布与恢复
 

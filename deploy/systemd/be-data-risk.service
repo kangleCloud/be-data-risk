@@ -1,0 +1,27 @@
+[Unit]
+Description=be-data-risk Python Nginx risk collection service
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/data/content/be-data-risk
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/data/content/be-data-risk/.venv/bin/python -m risk --config /data/content/be-data-risk/.env.prod
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+SendSIGKILL=yes
+TimeoutStopSec=60
+StandardOutput=append:/data/logs/be-data-risk/service.log
+StandardError=inherit
+UMask=0027
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
