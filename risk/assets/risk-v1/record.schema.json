@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Risk V1 record (canonical JSON and semantic checks additionally required)",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "COUNTER"
+        },
+        "recordId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "COUNTER"
+            },
+            "businessDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "regionCode": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|INTERNAL|[A-Z]{2}|CN-[A-Z0-9]{2})$"
+            },
+            "requestType": {
+              "enum": [
+                "API",
+                "STATIC",
+                "PAGE",
+                "SSE",
+                "RISK_INTERNAL",
+                "OTHER"
+              ]
+            },
+            "minuteAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+            },
+            "method": {
+              "type": "string",
+              "pattern": "^[A-Z]{2,12}$"
+            },
+            "pathTemplate": {
+              "type": "string",
+              "pattern": "^(/[A-Za-z0-9_/{}/:.*-]*|UNMATCHED)$"
+            },
+            "status": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|[1-5][0-9]{2})$"
+            }
+          },
+          "required": [
+            "kind",
+            "businessDate",
+            "regionCode",
+            "requestType",
+            "minuteAt",
+            "method",
+            "pathTemplate",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "requestCount": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "bytesSum": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "bytesValidCount": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "durationValidCount": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "durationSumMicros": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "upstreamFailureCount": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "histogram": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "minItems": 24,
+          "maxItems": 24
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "recordId",
+        "dimensions",
+        "requestCount",
+        "bytesSum",
+        "bytesValidCount",
+        "durationValidCount",
+        "durationSumMicros",
+        "upstreamFailureCount",
+        "histogram"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "SOURCE"
+        },
+        "recordId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "SOURCE"
+            },
+            "businessDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "regionCode": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|INTERNAL|[A-Z]{2}|CN-[A-Z0-9]{2})$"
+            },
+            "requestType": {
+              "enum": [
+                "API",
+                "STATIC",
+                "PAGE",
+                "SSE",
+                "RISK_INTERNAL",
+                "OTHER"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "businessDate",
+            "regionCode",
+            "requestType"
+          ],
+          "additionalProperties": false
+        },
+        "registersBase64": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 5464,
+          "maxLength": 5464
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "recordId",
+        "dimensions",
+        "registersBase64",
+        "keyId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "EXCEPTION"
+        },
+        "recordId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "EXCEPTION"
+            },
+            "businessDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "regionCode": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|INTERNAL|[A-Z]{2}|CN-[A-Z0-9]{2})$"
+            },
+            "requestType": {
+              "enum": [
+                "API",
+                "STATIC",
+                "PAGE",
+                "SSE",
+                "RISK_INTERNAL",
+                "OTHER"
+              ]
+            },
+            "minuteAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+            },
+            "pathTemplate": {
+              "type": "string",
+              "pattern": "^(/[A-Za-z0-9_/{}/:.*-]*|UNMATCHED)$"
+            },
+            "status": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|[1-5][0-9]{2})$"
+            },
+            "reasonCode": {
+              "enum": [
+                "INVALID_JSON",
+                "INVALID_TIME",
+                "INVALID_NUMBER",
+                "UNMATCHED_PATH",
+                "UNTRUSTED_IP",
+                "GEO_UNAVAILABLE",
+                "HTTP_5XX",
+                "HTTP_4XX",
+                "CLIENT_ABORT",
+                "UPSTREAM_FAILURE",
+                "SOURCE_TRUNCATED",
+                "KEY_UNAVAILABLE"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "businessDate",
+            "regionCode",
+            "requestType",
+            "minuteAt",
+            "pathTemplate",
+            "status",
+            "reasonCode"
+          ],
+          "additionalProperties": false
+        },
+        "count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "firstAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+        },
+        "lastAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "recordId",
+        "dimensions",
+        "count",
+        "firstAt",
+        "lastAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "QUALITY"
+        },
+        "recordId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "QUALITY"
+            },
+            "businessDate": {
+              "type": "string",
+              "format": "date"
+            },
+            "regionCode": {
+              "type": "string",
+              "pattern": "^(UNKNOWN|INTERNAL|[A-Z]{2}|CN-[A-Z0-9]{2})$"
+            },
+            "requestType": {
+              "enum": [
+                "API",
+                "STATIC",
+                "PAGE",
+                "SSE",
+                "RISK_INTERNAL",
+                "OTHER"
+              ]
+            },
+            "reasonCode": {
+              "enum": [
+                "INVALID_JSON",
+                "INVALID_TIME",
+                "INVALID_NUMBER",
+                "UNMATCHED_PATH",
+                "UNTRUSTED_IP",
+                "GEO_UNAVAILABLE",
+                "HTTP_5XX",
+                "HTTP_4XX",
+                "CLIENT_ABORT",
+                "UPSTREAM_FAILURE",
+                "SOURCE_TRUNCATED",
+                "KEY_UNAVAILABLE"
+              ]
+            },
+            "sourceId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,80}$"
+            }
+          },
+          "required": [
+            "kind",
+            "businessDate",
+            "regionCode",
+            "requestType",
+            "reasonCode",
+            "sourceId"
+          ],
+          "additionalProperties": false
+        },
+        "count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "recordId",
+        "dimensions",
+        "count"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

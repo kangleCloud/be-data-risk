@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "be-data-risk"
+version = "0.1.1"
+description = "Privacy preserving read-only Nginx risk collector"
+requires-python = ">=3.11"
+dependencies = ["redis>=5,<7", "jsonschema>=4,<5"]
+
+[project.optional-dependencies]
+test = ["fakeredis[lua]>=2.30,<3", "build>=1,<2", "maxminddb>=2,<4"]
+geo = ["maxminddb>=2,<4"]
+
+[tool.setuptools]
+packages = ["risk"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+risk = ["assets/*", "assets/risk-v1/*"]

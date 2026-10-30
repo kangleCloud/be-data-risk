@@ -1,0 +1,21 @@
+# 仅模板，不部署。核实用户、路径、依赖与只读日志/密钥可见权限后再使用。
+[Unit]
+Description=Risk v1 read-only Nginx collector
+After=network.target
+
+[Service]
+Type=simple
+User=<DEDICATED_READ_ONLY_USER>
+WorkingDirectory=<ABSOLUTE_BE_DATA_RISK_DIRECTORY>
+ExecStart=<ABSOLUTE_BE_DATA_RISK_DIRECTORY>/.venv/bin/python -m risk --config <ABSOLUTE_PRIVATE_CONFIG_PATH>
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

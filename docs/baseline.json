@@ -1,0 +1,12 @@
+{
+  "newProjectAbsentAtStart": true,
+  "repositories": {
+    "be-data-analysis": "",
+    "be-data-stock": "",
+    "fe-data-stock": " M docs/portfolio-v1.0.1.md\n M src/api/portfolio.ts\n D src/components/portfolio/ActionDrawer.vue\n D src/components/portfolio/BrokerReferenceDetails.vue\n D src/components/portfolio/PortfolioStatus.vue\n M src/components/portfolio/PositionDrawer.vue\n D src/components/portfolio/TradeDetailDrawer.vue\n D src/components/portfolio/TradeDrawer.vue\n D src/components/portfolio/UncertainResultNotice.vue\n M src/composables/usePortfolioPage.ts\n M src/styles/portfolio.css\n M src/types/portfolio.ts\n M src/utils/portfolio.ts\n D src/views/portfolio/actions/index.vue\n M src/views/portfolio/dashboard/index.vue\n M src/views/portfolio/positions/index.vue\n D src/views/portfolio/trades/index.vue\n M tests/portfolio-api.spec.ts\n M tests/portfolio-id.spec.ts\n M tests/portfolio.spec.ts\n?? src/components/portfolio/SnapshotDrawer.vue\n"
+  },
+  "sha256": {
+    "AGENTS.md": "f3af14ae728cbc3a6a12298ad4ec515b58b3dee062f99bd0f61c492d510c72a1",
+    "docs/risk-v1-implementation-contract.md": "8a13987a29237c73adb6a0914bd0b70a62ec647429c86bbd21154be45c9331f0"
+  }
+}

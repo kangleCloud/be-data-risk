@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-27",
+  "phase": "before-contract-freeze-reverification",
+  "gitStatus": "?? .gitignore\n?? README.md\n?? docs/\n?? examples/\n?? pyproject.toml\n?? risk/\n?? tests/\n",
+  "sha256": {
+    ".gitignore": "19547913ad50699ba194cff3007958c032af5462787f9f313afc43f505602e87",
+    "README.md": "b86216b1c04c7b53238484bab412074787dbb6ff22c1331679ab953b0323f66d",
+    "docs/baseline.json": "5587772ef3c550f4ed37f884cd91a7338483155f5df5a14f0f45b9604440ac8f",
+    "docs/verification.md": "d38f3a6221d4a62f780eccf8c55ff9990fcab4a471a453e9a888fb1b7b4121b6",
+    "examples/config.example.json": "8d370d75063ef700f7804cb95216445a5554c5b8d8c52f379a0838b0bcc05678",
+    "examples/nginx-risk.conf.example": "ffe00d06f231d6d134be1e67886e018435bc292005b92b0a981cf98b3d374d95",
+    "examples/risk.service.example": "4b2d83a745bacca069cf561ec86a0c7fba012ac0894fdf9b5821f1e3c566b25c",
+    "examples/sanitized.jsonl": "3158ce8da5f851f2a1eb774d63b6097ca66064f7b25f1a346b3110b7dc51020c",
+    "pyproject.toml": "bc220f8187be400065dcf5c05b3508c460735fdc7b923a96d49c77f1273fcd99",
+    "risk/__init__.py": "1b79bb94945a93086607c7b52c540c7a7e3d86e96033a34fd06bc83c645b5778",
+    "risk/__main__.py": "674d1c3e4a69c2979006cb3d472b9f8d91c77d3e39b145d248e780470184a172",
+    "risk/algorithms.py": "4f6d14fed8f86c9322cf5d261ed568686f873bd80241b7432fd27dfbb4518dd0",
+    "risk/config.py": "dc17df54a32bf7da641a8b0430bceb389ea4f266afbf8aa990adfdc74b1f4087",
+    "risk/parsing.py": "e6fd0583f78aa7e2c8005e6fd2cf276bec91aefe795994d350addb360b7f0c7b",
+    "risk/tailer.py": "6397d932f06b431305d34fc73659617e5ed62823c39b632034a063c3a5d723c1",
+    "tests/test_core.py": "5148f8a22e2c2056feda7796dcfbf8a351ed39d2aa8547bcd778a46a91512a20"
+  }
+}

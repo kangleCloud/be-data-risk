@@ -1,0 +1,2 @@
+{"time_iso8601":"2026-10-27T12:00:00+08:00","uri":"/example","request_method":"GET","status":"200","body_bytes_sent":"128","request_time":"0.001250","upstream_status":"-"}
+{"time_iso8601":"2026-10-27T12:00:01+08:00","uri":"/example","request_method":"GET","status":"499","body_bytes_sent":"-","request_time":"-","upstream_status":"502, 504"}

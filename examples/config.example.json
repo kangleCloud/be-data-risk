@@ -1,0 +1,11 @@
+{
+  "sources": [],
+  "redisUrl": null,
+  "hmacKeyFile": null,
+  "geoDatabase": null,
+  "pathRules": [],
+  "trustedProxies": [],
+  "directPeerTrusted": false,
+  "maxLineBytes": 65536,
+  "pollMillis": 200
+}

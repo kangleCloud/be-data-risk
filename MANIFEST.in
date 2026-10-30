@@ -1,0 +1,5 @@
+include README.md requirements*.txt
+recursive-include risk/assets *
+recursive-include examples *.example *.json *.jsonl
+recursive-include tests *.py
+recursive-include scripts *.py
