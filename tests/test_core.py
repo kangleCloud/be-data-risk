@@ -84,16 +84,16 @@ class ParsingTest(unittest.TestCase):
     def test_privacy_default(self):
         event = parse_event(self.event(), PrivacyPolicy())
         self.assertEqual(event['region_code'], 'UNKNOWN')
-        self.assertEqual(event['path_template'], 'UNMATCHED')
+        self.assertEqual(event['path_template'], '/api/user/123')
         self.assertEqual(event['business_date'], '2026-10-28')
         self.assertNotIn('secret', str(event))
         self.assertNotIn('8.8.8.8', str(event))
-        self.assertNotIn('/api/user/123', str(event))
+        self.assertNotIn('?token=', str(event))
 
     def test_templates_priority(self):
         policy = PrivacyPolicy([PathRule('/api/.*', '/api/{other}', 'API'), PathRule('/api/risk/.*', '/api/risk/{other}', 'RISK_INTERNAL')])
-        self.assertEqual(policy.path('/api/risk/test?a=secret')[1], 'RISK_INTERNAL')
-        self.assertEqual(policy.path('/unmatched/secret'), ('UNMATCHED', 'OTHER'))
+        self.assertEqual(policy.path('/admin/api/risk/test?a=secret')[1], 'RISK_INTERNAL')
+        self.assertEqual(policy.path('/unmatched/secret'), ('/unmatched/secret', 'PAGE'))
 
     def test_fake_forwarded(self):
         policy = PrivacyPolicy(trusted_proxies=['10.0.0.0/8'])

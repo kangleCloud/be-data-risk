@@ -6,6 +6,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
 from .algorithms import HLL, canonical, record_id
+from .paths import valid_stored_path
 
 ASSETS = Path(__file__).with_name('assets')
 PROTOCOL_VERSION = 'risk-v1-20261028-immutable-r1'
@@ -33,6 +34,10 @@ def validate_record(record, encoded=None):
     if type(record['schemaVersion']) is not int or record['schemaVersion'] != 1:
         raise ValueError('INVALID_RECORD')
     dimensions = record['dimensions']
+    if any(not isinstance(value, str) or len(value) > 512 or not value.isascii() for key, value in dimensions.items() if key != 'pathTemplate'):
+        raise ValueError('INVALID_RECORD')
+    if 'pathTemplate' in dimensions and not valid_stored_path(dimensions['pathTemplate']):
+        raise ValueError('INVALID_RECORD')
     if dimensions['kind'] != record['kind'] or record_id(dimensions) != record['recordId']:
         raise ValueError('INVALID_RECORD')
     if encoded is not None and canonical(record).decode() != encoded:

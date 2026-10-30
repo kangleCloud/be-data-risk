@@ -49,7 +49,10 @@
             },
             "pathTemplate": {
               "type": "string",
-              "pattern": "^(/[A-Za-z0-9_/{}/:.*-]*|UNMATCHED)$"
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(UNMATCHED|/([^{}\\u0000-\\u001f\\u007f-\\u009f\\\\<>\"`?#%]|\\{(redacted(:[a-f0-9]{64})?|path:([a-f0-9]{64}|redacted)|[A-Za-z_][A-Za-z0-9_]*)\\})*)$",
+              "description": "NFC Unicode code points; semantic marker/control/privacy validation required by risk-path-v1 contract"
             },
             "status": {
               "type": "string",
@@ -227,7 +230,10 @@
             },
             "pathTemplate": {
               "type": "string",
-              "pattern": "^(/[A-Za-z0-9_/{}/:.*-]*|UNMATCHED)$"
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(UNMATCHED|/([^{}\\u0000-\\u001f\\u007f-\\u009f\\\\<>\"`?#%]|\\{(redacted(:[a-f0-9]{64})?|path:([a-f0-9]{64}|redacted)|[A-Za-z_][A-Za-z0-9_]*)\\})*)$",
+              "description": "NFC Unicode code points; semantic marker/control/privacy validation required by risk-path-v1 contract"
             },
             "status": {
               "type": "string",

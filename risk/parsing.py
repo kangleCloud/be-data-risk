@@ -7,6 +7,7 @@ import json
 import re
 from zoneinfo import ZoneInfo
 from .algorithms import micros, number
+from .paths import protect_path, validate_template
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 REASONS = frozenset({'INVALID_JSON', 'INVALID_TIME', 'INVALID_NUMBER', 'UNMATCHED_PATH',
@@ -55,25 +56,20 @@ class PathRule:
 class PrivacyPolicy:
     def __init__(self, rules=(), trusted_proxies=(), direct_peer_trusted=False, geo=None):
         self.rules = [(re.compile(rule.pattern), rule.template, rule.request_type) for rule in rules]
-        if any(not isinstance(template, str) or len(template) > 512 or not re.fullmatch(r'(/[A-Za-z0-9_/{}/:.*-]*|UNMATCHED)', template) for _, template, _ in self.rules):
-            raise ValueError('INVALID_TEMPLATE')
+        for _, template, _ in self.rules:
+            validate_template(template)
         if any(kind not in {'API', 'STATIC', 'PAGE', 'SSE', 'RISK_INTERNAL', 'OTHER'} for _, _, kind in self.rules):
             raise ValueError('INVALID_RULE')
         self.networks = tuple(ipaddress.ip_network(value) for value in trusted_proxies)
         self.direct_peer_trusted = direct_peer_trusted
         self.geo = geo
 
-    def path(self, value):
-        if not isinstance(value, str):
-            return 'UNMATCHED', 'OTHER'
-        path = value.partition('?')[0]
-        if re.fullmatch(r'/(?:stock/)?admin/api/risk(?:/.*)?', path):
-            return '/admin/api/risk/{endpoint}', 'RISK_INTERNAL'
-        # Internal rules have priority regardless of configuration order.
-        for pattern, template, kind in sorted(self.rules, key=lambda rule: rule[2] != 'RISK_INTERNAL'):
-            if pattern.fullmatch(path):
-                return template, kind
-        return 'UNMATCHED', 'OTHER'
+    def protected_path(self, value, business_date, key=None):
+        return protect_path(value, business_date, key, self.rules)
+
+    def path(self, value, business_date='1970-01-01', key=None):
+        result = self.protected_path(value, business_date, key)
+        return result.template, result.request_type
 
     def source(self, peer, forwarded=None):
         if not self.direct_peer_trusted and not self.networks:
@@ -159,13 +155,13 @@ def parse_event(raw, policy, hll=None, hmac_key=None):
         if status is not None and not 100 <= status <= 599:
             status = None
             quality.add('INVALID_NUMBER')
-        template, kind = policy.path(data.get('uri'))
+        protected = policy.protected_path(data.get('uri'), instant.date().isoformat(), hmac_key)
+        template, kind = protected.template, protected.request_type
+        quality.update(protected.quality)
         method = data.get('request_method')
         method = method if method in {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'CONNECT', 'TRACE'} else 'UNKNOWN'
         address = policy.source(data.get('remote_addr'), data.get('http_x_forwarded_for'))
         region = policy.region(address)
-        if template == 'UNMATCHED':
-            quality.add('UNMATCHED_PATH')
         if address is None:
             quality.add('UNTRUSTED_IP')
         elif region == 'UNKNOWN':

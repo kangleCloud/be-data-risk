@@ -1,43 +1,40 @@
-# 2026-10-28 V1不可变批次本轮验证
+# 2026-10-30 路径计数与隐私增量验证
 
-需求：根 `docs/redis-risk-implementation-contract.md` 与 `docs/risk-v1-contract.md`；共享标识risk-v1-20261028-immutable-r1。本轮基线 `immutable-baseline.json` 已记录已有文件SHA/状态，保护此前所有业务修改；只修改本仓库和授权独占的根risk-v1共享资产，没有改Java、行情Python、Vue或私有配置。无提交、部署、SQL、现有服务访问或Review。
+范围：仅be-data-risk及授权独占的根docs/risk-v1共享资产。执行前工作树干净；源/资源/测试/示例SHA及私有值摘要基线见 `path-baseline-20261030.json`（不记录私有值正文）。未改Java、行情Python或Vue，未提交/部署/SQL/Review，未连接现有Redis/MySQL/Nginx，也没有启动实际collector。
 
-## 当前结果
+## 当前验证
 
-- `.venv/bin/python -m unittest discover -s tests -q`：**118 tests，本轮完整运行全部通过**。这是当前新实现测试数量，不是沿用旧报告的93项。
+- `.venv/bin/python -m unittest discover -s tests -q`：**132 tests，本轮完整运行通过**，其中集中路径fixture有66个subcase。未把历史118项当成本轮结果。
 - `.venv/bin/python -m compileall -q risk tests scripts`：通过。
-- fakeredis 2.40.0/Lupa 2.8实际执行publish/lease/heartbeat/migrate原始共享Lua，非Python重写脚本结果；Python 3.14.5，redis6.4.0/jsonschema4.26.0/maxminddb3.2.0，项目`.venv`。
-- `python -m risk --config ... --once`与SIGTERM服务入口在fake连接下执行，退出提交剩余缓冲，释放所属lease；异常日志不暴露原值。
-- 显式迁移工具默认dry-run无写入、execute仅复制旧日keyId、原checkpoint DUMP字节未变、重复执行幂等、源变化/目标冲突/旧批次/旧lease拒绝；恢复实测从旧文件offset只读剩余一行，未从头重计。没有执行真实迁移。
+- 新旧fixture实际由 `Draft202012Validator + FormatChecker` 验证：旧统计记录1、新路径记录66、不可变批次中的记录10，合计 **77份记录全部通过**；`check_schema`通过。额外正反例检查中文/emoji的512码点、合法marker/占位符、错误大小写hex、短摘要、散落大括号、控制字符、requestType/method/regionCode/status大小写。NFC及完整marker位置边界仍另做语义验证，不能仅靠JSON Schema推断。
+- 本轮无pathRules的Collector+fakeredis/Lupa回归：新API/404/中文/编码/动态路径/三条SSE的9种部署形式/风控自身全部计数，敏感值不出现在事件、聚合、Redis envelope或诊断日志。
+- 路径新规则覆盖敏感字段及中文字段、邮箱/手机号/IP/UUID/JWT/24字符随机边界、现有日key独立HMAC、两轮解码/NFC、无key安全marker、Unicode/非BMP码点上限、超长HMAC使用截短前已逐段脱敏路径、禁止截断marker；旧分组模板再次脱敏且不覆盖固定分类，不展开捕获组。
+- 来源可信代理、离线地域/HLL、10秒/500记录/真实1MiB、原子checkpoint、租约、半行/轮转/重启/丢响应/归档清理后恢复、迁移dry-run与原位续读测试继续通过；未改这些运行协议。
+- `.venv/bin/python -m risk --check-file examples/sanitized.jsonl`：accepted=2，仅UNTRUSTED_IP=2；不再将普通未知路径记UNMATCHED_PATH。
 
-## 覆盖范围
+## 共享资产与冻结后变化
 
-10秒截止与空闲等待不越过期限；500不同记录真实边界、完整1MiB真实编码边界、单行超限停在持久检查点之前；内存游标与持久checkpoint分离、同维度段内累加；日期切换与文件代次先提交旧段；空代次转换批次。
+路径语义位于根 `docs/risk-v1/protocol.md` 的 `risk-path-v1-20261030-r1` 节；pathTemplate字段/schemaVersion=1/批次键和其他维度不变，历史UNMATCHED仍可读。record.schema增量允许NFC中文及marker并限制512码点；其他维度仍严格ASCII/枚举。schema按冻结语义收紧marker字面量与C1控制字符，并非另选路径规则。
 
-崩溃未发布段重读、已发布重启不重计、失败保留同UUID/字节、丢响应确认ALREADY_COMMITTED、Java普通事务清理后丢响应不重建payload；lease竞争/续租失败/所属释放、checkpoint冲突停源、同日日keyId冲突、独立源互不使用全局revision。
+集中 `path-fixtures.json` 从首次报告57增加为59（补充IPv4/IPv6字面量保护），再按主控许可增加7份实际入口兼容样例到 **66**：/app/api、/scheduler/api及/stock形式，以及本项目实际/internal jobs/stock-monitor/etf-monitor接口。原三条SSE、其余已冻语义不扩展。源路由核对来自4模块application.yml与行情Python APIRouter，只读未改其他仓库。
 
-Lua在首写前拒绝错误末尾键类型、错误键名、后续非法记录、错误数量/顺序/重复ID、空对象冒充数组、超500条/1MiB、额外envelope/检查点字段、offset前导零/倒退、租约丢失、日keyId与批次冲突。未归档数据无TTL，只有lease TTL；不创建旧revision/active/directory，未写行情键。
+最终SHA256：
 
-严格JSON/隐私/数值未知/时间兼容、原HLL/hash/分桶/canonical/checksum统计fixture保留；新增同日迟到/次日/重复来源合并/质量/空批次共享fixture。半行、轮转、截断、源不可读不发健康空态心跳的回归均保留。
+| 文件 | SHA256 |
+| --- | --- |
+| path-fixtures.json | 99599afbf58de6ac0cc7c6360a7a68bfee562873ad4d8e1dfafc43218dfc4cc7 |
+| sha256.json自身 | 8ec5e67800a9dfdaff0c4b3ea373a16b6a8596757318672e665e7b829e67fe91 |
 
-## 临时跨语言产物
+Java需按最终同字节资产验证Unicode码点/canonical/recordId/checksum，支持新路径后才允许实际接入。样例输入与key均为明确合成，不使用真实秘密；输出counter、recordId与checksum由真实Python生产者路径构造。
 
-`/tmp/risk-v1-immutable-python-export.json`：真实Collector+FileTailer+fakeredis/Lupa产生4个不可变批次（同日首次、同日迟到、次日、轮转空批次），记录数14/4/2/0，各自canonical、count、checksum已重新读取验证；原首次批次字节保持不变。文件标fixture，无原始日志、IP或密钥。
+## 打包与检查
 
-手工预期与产物核对：请求10、API6、499为1、HTTP错误1、上游失败尝试2；REST P95桶上界50000微秒、SSE P95桶上界120000000微秒；INVALID_JSON=1；2026-10-27来源并集3（两批2和3不能加成5），2026-10-28来源1，跨日独立。包含API200/502/499、STATIC304、SSE200的60/61秒、RISK_INTERNAL、非法JSON。供Java/H2消费，不声称已由本Python会话验证数据库事务。
+根共享资产与包内资源文件集合/字节/SHA、语法、git diff-check均通过；新增文本尾随空白扫描通过。既有发布/checkpoint/lease/迁移/算法文件SHA与执行前基线一致，私有值摘要未变。
 
-## 打包与交付检查
+`PYTHONPATH=/opt/homebrew/lib/python3.14/site-packages .venv/bin/python -m build --no-isolation --outdir /tmp/risk-path-20261030-dist` 成功生成sdist与wheel，未下载依赖、未覆盖原dist包。`.venv/bin/python scripts/verify_package.py /tmp/risk-path-20261030-dist/be_data_risk-0.1.1-py3-none-any.whl`通过：无父目录docs的临时目录、`-I`隔离路径、包内SHA、新旧fixture/schema/checksum及CLI入口验证成功。
 
-- `PYTHONPATH=/opt/homebrew/lib/python3.14/site-packages .venv/bin/python -m build --no-isolation`：成功生成 `dist/be_data_risk-0.1.1.tar.gz` 和 `dist/be_data_risk-0.1.1-py3-none-any.whl`；使用此前已存在的本机setuptools/wheel构建工具，没有下载新依赖。
-- `.venv/bin/python scripts/verify_package.py`：临时目录解包、`-I`隔离路径下校验包内SHA、原统计fixture、新envelope fixture、CLI入口，脱离父目录运行通过。
-- wheel内容核对：包含当前publish/migrate/lease/heartbeat及schema/SHA同字节副本；无旧mutate.lua。构建前清理本项目生成的build缓存，避免已删除脚本被误带入。
-- 根共享目录与包资源文件集合和逐字节/SHA校验全部通过；原record.schema.json与risk-v1-fixtures.json的SHA与本轮执行前基线相同。
-- 共享SHA清单文件自身SHA256：`c1149a9c5bce3bc76279e4176aaaf5a7733c384a87829cbeeaf235db6d4c5a67`。
-- `git diff --check`通过；因仓库仍是新文件未提交，额外扫描全部待跟踪文本尾随空白通过。
-- 全源码/资源/脚本/测试/文档命名空间检索通过：统一V1，无并行版本资产、版本开关或风控手动业务。运行只读包内资产。
+## 未真实验收项
 
-## 未实测
+未访问真实Redis Server/MySQL/H2/Nginx/地域库，不替代Java归档事务和跨语言验收；fake Redis/Lupa仅证明隔离原始Lua回归。没修改服务器Nginx，示例保留现有escape=json+$uri，只补字段与源日志隐私说明；不存在需要删除的白名单map。
 
-未连接真实Redis Server/主从故障转移/持久化/内存压力，fakeredis不能替代线上验收。没有Python端MySQL依赖；Java事务回滚/提交后中断/清理失败/并发归档/Redis-DB查询过渡由Java验收。本轮未替代其测试结果。
-
-真实Nginx版本/日志路径/代理链/轮转、服务器权限/systemd、地域库内容与许可、生产吞吐仍未核实。copytruncate快速回涨、inode复用、旧文件提前删除压缩、切换后旧句柄写入有文件系统窗口；旧inode找不到会失败，不能静默忽略。单线程IO受宿主机存储延迟影响，10秒是缓冲调度期限，不是硬实时系统。
+未做生产吞吐/服务器权限/真实日志轮转/systemd验收；copytruncate等既有文件系统窗口不变。启发式无法识别任意伪装成普通文字的秘密，不作绝对保证。主控须在Java支持最终schema/fixture后再安排实际接入。

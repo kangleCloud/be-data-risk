@@ -3,9 +3,10 @@
   "heartbeat.lua": "afe71ac8f968472f049e1453759bc95976bf0815b1d843083a9443d6dbfc2654",
   "lease.lua": "ffb9329d47f2ddcfcc3cfcbb7b536a95cec7da9ea52d6937962b12653bfccbe5",
   "migrate.lua": "8beca32a8468f14b85c24d325b4c7f53f606cadcc7522c1992f7d6b12dbb58c9",
-  "protocol.md": "fdb1b83c8a5aec26c3a6c31f1a4ee774a5347415725ace37e110842202655c2e",
+  "protocol.md": "adcb3c1ab31227fdb0e8fbbfb6696d954f2ae389e660982c96c3e59ea12c68ef",
   "publish.lua": "21519f91ffb67957b169bfc9d97adf6ab574ce131f8f42421de0c974cc90213c",
-  "record.schema.json": "3a36bd0c06d5f8b755bf7ce326d4fe7e3433b218bef0c8b35a78ea64bbda90a0",
+  "record.schema.json": "a10904be3565dff0caec3b584dd44ae969ec7c1e3525a099241c1b12b8a5fa72",
   "../risk-v1-fixtures.json": "fc4a64f12b56604a962e0c44a9c8d4f3fbc5979afe34cae940b77a6064c7e484",
-  "../risk-v1-batches.json": "f35c0266e5da80e65d79c45d112f999e5714a937c385a97f2b5dc6b7bd8d252b"
+  "../risk-v1-batches.json": "f35c0266e5da80e65d79c45d112f999e5714a937c385a97f2b5dc6b7bd8d252b",
+  "path-fixtures.json": "99599afbf58de6ac0cc7c6360a7a68bfee562873ad4d8e1dfafc43218dfc4cc7"
 }

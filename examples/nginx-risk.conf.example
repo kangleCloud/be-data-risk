@@ -8,3 +8,5 @@ log_format risk_json escape=json '{"time_iso8601":"$time_iso8601",'
   '"upstream_status":"$upstream_status"}';
 access_log <NGINX_ACCESS_LOG_PATH> risk_json;
 # 不凭示例加入 real_ip_header/set_real_ip_from；必须先验证真实代理链。
+# uri 使用现有 $uri，仍可能在路径段中带敏感值；Python采集后脱敏不消除源日志隐私。
+# 不新增白名单map或服务端过滤：所有合法请求统计，不依赖pathRules；真实路径与权限仍由运维核实。

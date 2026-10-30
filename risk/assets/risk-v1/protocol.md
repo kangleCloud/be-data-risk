@@ -37,3 +37,44 @@ heartbeat.lua：KEYS仅heartbeat，ARGV now,lastEventTime（可空），返回OK
 新采集器的随机lease token以immutable-前缀标记本实现（非模式开关）；旧无前缀token存在时阻止启动。迁移工具要求所有源lease退出；新采集器之间正常按源竞争lease。共享脚本接受任意非空owner token，前缀只用于本实现的离线切换识别，不改变键或请求协议。
 
 Java归档只读批次，事务提交并核验后MULTI/EXEC执行DEL精确batch、SREM该date pending；不删days/checkpoints/day-key-ids。不用封存或Redis归档锁。查询按batchId跨Redis/DB去重并核对count/checksum；pending有ID而payload缺失时需DB确认，不能静默漏计。
+
+## 路径增量契约 risk-path-v1-20261030-r1
+
+本段取代旧“未知路径UNMATCHED”的生产规则，不改字段名pathTemplate/记录schemaVersion/批次协议/HTTP。所有JSON合法、时间合法的请求（含404）必须计数，pathRules不存在或不匹配都不能过滤。旧UNMATCHED/UNMATCHED_PATH只兼容历史；新普通未知路径保留可区分的脱敏结构，不生成UNMATCHED_PATH。
+
+### 规范化和不合规输入（先于规则）
+
+1. uri必须是以`/`开头的Unicode字符串。原输入严格UTF8不超过16384字节；拒绝未配对surrogate。先截去原始字符串中最早的`?`或`#`及之后内容，保留路径。输入上限在截query前检查，超限不持久化原值。
+2. 百分号严格解码最多2轮：每轮每个`%`必须紧跟2个ASCII hex；将百分号字节及其他字符UTF8字节合并，以严格UTF8解码，不将`+`改空格。结果仍含`%`时进行第二轮，第二轮后还含任何`%`一律不合规（包含需第三轮解码和编码的字面百分号）。每轮UTF8长度仍不得超过16384。解码出的`/`成为分段界限。原始及每轮字符均拒绝Unicode类别Cc/Cf/Cs/Zl/Zp，禁止控制/双向与隐藏格式字符。
+3. Unicode NFC（不做NFKC/大小写折叠），再次截最早`?/#`，折叠连续`/`，保留单个末尾`/`。不解析`.`/`..`、不改变普通大小写。拒绝反斜杠、ASCII尖括号/双引号/反引号以及原始大括号`{}`（防伪造脱敏marker）。其他可见Unicode标量包括中文/emoji允许；不从字符串中提取主机或访问外部服务。
+4. 不合规/缺失uri统一输出`/__invalid_path__`、OTHER、质量UNMATCHED_PATH；仍有COUNTER。不输出不合规输入的HMAC或原片段。正常未知路径没有质量故障。
+
+### 分段敏感检测（顺序固定）
+
+分隔符为规范化后的`/`。敏感字段集合（ASCII部分按lowercase匹配、中文原字）为password/passwd/pwd/token/access_token/refresh_token/secret/authorization/cookie/密码/令牌。
+
+- 一个segment完全等于敏感字段时，保留字段名；紧随的非空segment整体为敏感值，替换，不再解析其结构。
+- segment中以`=`或`:`分隔时，以这些字符的首次出现拆成field/value；field在集合中时保留field+分隔符，value整体替换（空值也替换）。其他位置匹配以下启发式时，整个segment替换。
+- 邮箱：segment任意位置匹配`[^/\s@]+@[^/\s@]+\.[^/\s@]+`（Unicode空白语义）；手机号：任意位置匹配ASCII数字串、两端不能相邻ASCII数字，值为可选`+86`/`86`后`1[3-9][0-9]{9}`；UUID：任意位置ASCII hex的8-4-4-4-12，不要求版本位；JWT：任意位置三个以`.`分隔且各至少8位的`[A-Za-z0-9_-]`片段。
+- 保持原不持久化完整IP的边界：整个segment为合法IPv4/IPv6（可带一对方括号），或首次`=`后的完整值为合法IP时，整个segment摘要化；仅做字面IP解析，不查询DNS。
+- 长随机串：segment任意位置存在连续至少24个`[A-Za-z0-9_-]`，且该串同时含ASCII字母和数字，或该串本身是至少24位hex（全数字也算）。不按熵/语言猜测；不满足hex条件的纯长英文、纯中文不因此认定随机。启发式命中时摘要整个segment，不保留邮箱/号码等局部文本。
+
+### 摘要与长度
+
+使用现有日密钥，但独立用途：`HMAC-SHA256(key, UTF8("risk-path-v1\n" + businessDate + "\nsegment\n" + NFC(normalizedValue)))`，输出完整64位小写hex。`segment`是ASCII字面量，不是路径位置；value是被替换值的完整规范化字符串，不trim/不改大小写。marker为`{redacted:<hex>}`。无密钥为固定`{redacted}`，计一次KEY_UNAVAILABLE（与来源HLL缺key原因去重），不得回退明文。普通无需摘要的路径不因路径功能缺key而告警。
+
+脱敏后路径最多512 Unicode码点（不是UTF16长度/UTF8字节）。超长时输出：脱敏路径的前`512 - suffix码点数`个码点 + `/{path:<hex>}`；摘要输入改为`"risk-path-v1\n" + businessDate + "\npath\n" + redactedFullPath`（截短前已经逐段脱敏的完整规范路径，含首尾slash与marker，不含query/fragment；不使用原始秘密）。无密钥suffix为`/{path:redacted}`并KEY_UNAVAILABLE。截取前缀仅来自已经脱敏的结果；如果切点落在本实现生成的`{redacted...}`marker内部，退到该marker开头再加suffix，允许结果少于512。不得在marker中间留下半个摘要。全路径HMAC也仅保留64hex，不落原长路径。
+
+### 旧规则和分类
+
+分类看规范化原路径、先于可选分组，大小写敏感且路径边界必须`/`或末尾：
+
+1. RISK_INTERNAL：`/admin/api/risk`、`/stock/admin/api/risk`及其后续路径。
+2. SSE：三条精确基路由`/market/dashboard/stream`、`/stock-monitor/v1/stream`、`/etf-monitor/v1/stream`；各允许无前缀、`/openapi/api`、`/stock/openapi/api`三种部署形式。不靠后缀stream/SSE字样猜测。
+3. STATIC：`/assets`、`/static`及其子路径，或最后segment后缀忽略大小写为css/js/mjs/map/png/jpg/jpeg/gif/svg/ico/webp/avif/woff/woff2/ttf/eot/txt/xml/pdf/mp4/webm。
+4. API：`/api`、`/admin/api`、`/app/api`、`/openapi/api`、`/scheduler/api`及`/stock`加这些前缀；或`/internal`、`/market`、`/stock-monitor`、`/etf-monitor`及子路径。`/internal`来自实际Python jobs/stock-monitor/etf-monitor路由，仅分类现有请求，不新增接口或业务模式。
+5. PAGE：`/`、末尾`/`、末segment无`.`、或后缀html/htm；其余OTHER。
+
+可选pathRules只作静态模板分组：只匹配已规范化路径、从不丢弃请求，旧requestType配置字段保留可读但不参与上述分类。RISK_INTERNAL/SSE不分组；原路径发生敏感替换或长度缩减时也不分组。普通路径按配置顺序首个fullmatch取静态template（不展开捕获组）；template最多512码点，可含规范中文及完整占位符`{[A-Za-z_][A-Za-z0-9_]*}`，只能是整个segment。template本身再次按相同隐私流程规范化/敏感检测，完整占位符作为受信静态片段保留；字段后的占位符仍按敏感值摘要。配置模板含query/fragment/百分号、非法字符或需缩短时拒绝配置；不能用规则原文绕过脱敏。历史template=UNMATCHED只视为不分组。
+
+持久化接收端：pathTemplate允许旧UNMATCHED或`/`开头、NFC、<=512码点的可见Unicode路径（控制类别、反斜杠、尖括号、双引号、反引号、query/fragment/百分号禁用）；大括号只能是上述完整占位符或合法redacted/path marker，不接受散落大括号。其他维度保持原严格ASCII/枚举约束。启发式不能识别任意伪装成普通文字的秘密，不宣称绝对保证。Java必须先支持本段schema/Unicode/canonical字节与集中path-fixtures.json，再真实接入；本轮仅离线。

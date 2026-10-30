@@ -39,7 +39,7 @@ class CollectorTest(unittest.TestCase):
         self.addCleanup(self.client.close)
         self.store = RedisStore(self.client)
         self.source = SourceConfig('source_test', self.path)
-        self.policy = PrivacyPolicy([PathRule('/api/sample', '/api/sample', 'API'), PathRule('/events', '/events', 'SSE')], direct_peer_trusted=True)
+        self.policy = PrivacyPolicy([PathRule('/api/sample', '/api/sample', 'API'), PathRule('/market/dashboard/stream', '/market/dashboard/stream', 'SSE')], direct_peer_trusted=True)
         self.config = Config((self.source,), self.policy, 65536)
         self.time = 0.0
         self.collector = self.new_collector()
@@ -329,7 +329,7 @@ class CollectorTest(unittest.TestCase):
         self.assertNotIn('secret', json.dumps(env) + json.dumps(diagnostics))
 
     def test_privacy_and_sse_upstream_statuses_unchanged(self):
-        self.path.write_bytes(log(uri='/events', request_time='60', status='200', upstream_status='502, 504', authorization='secret-token'))
+        self.path.write_bytes(log(uri='/market/dashboard/stream', request_time='60', status='200', upstream_status='502, 504', authorization='secret-token'))
         self.drain(); self.collector.flush_all()
         env = self.batches()[0]
         counter = next(row for row in env['records'] if row['kind'] == 'COUNTER')

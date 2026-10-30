@@ -2,7 +2,7 @@
 
 独立 Python Nginx 只读采集服务：文件增量读取 → Redis `risk:v1:` 日期不可变批次。统一 **V1**，无版本开关、行情式手动采集模式或 HTTP 业务接口。Python 不连接 MySQL，不修改行情任务；Java 负责只读归档和落库核验后的精确清理。
 
-当前冻结标识 **risk-v1-20261028-immutable-r1**。`risk/assets/risk-v1/` 与根共享资产同字节，运行校验 SHA；只读取包内资源，不读取父目录。记录 schema、统计 fixtures、recordId、HLL、Decimal HALF_UP、直方图和 checksum 保持原样。当前实现没有全局 revision、活动/封存批次或 SEAL/CLEAN 脚本。
+当前冻结标识 **risk-v1-20261028-immutable-r1**。`risk/assets/risk-v1/` 与根共享资产同字节，运行校验 SHA；只读取包内资源，不读取父目录。统计记录字段、历史 fixtures、recordId、HLL、Decimal HALF_UP、直方图和 checksum 保持；pathTemplate 增量支持规范中文与路径隐私 marker。当前实现没有全局 revision、活动/封存批次或 SEAL/CLEAN 脚本。
 
 ## 安装和验证
 
@@ -30,7 +30,7 @@ python3 -m venv .venv
 | geoDatabase | 获许可的本地 MaxMind 库；缺失或无法加载返回未知并固定告警，不查询外网 |
 | trustedProxies | 经核实的可信代理 CIDR，默认空 |
 | directPeerTrusted | 是否明确允许采信 remote_addr，默认false |
-| pathRules | 全匹配规则 `{pattern,template,requestType}`，模板ASCII且<=512字符 |
+| pathRules | 全匹配规则 `{pattern,template,requestType}`，仅可选分组，支持NFC中文且<=512码点；requestType不覆盖固定分类 |
 | maxLineBytes | 默认65536；超长行有界内存扫描到LF，只计INVALID_JSON |
 | pollMillis | 默认200，允许10..10000；空闲等待还会缩短到缓冲/续租/心跳最近期限 |
 
@@ -81,8 +81,10 @@ copytruncate快速回涨、inode复用、旧文件提前删除/压缩、切换�
 
 严格UTF8/JSON，不修补非法转义，拒绝重复键/NaN。兼容@timestamp/time_iso8601，同存需同一时刻，统一上海日期。缺失/`-`为未知；非法数字为null且计INVALID_NUMBER，秒到微秒Decimal HALF_UP不经float。
 
-路径仅在内存匹配受控模板，未知UNMATCHED/OTHER；内置 `/admin/api/risk` 和 `/stock/admin/api/risk` 优先RISK_INTERNAL。没有可信规则时IP未知；可信链从右往左判断，不信任假代理头。IP只在内存用于日HMAC/p12 HLL及离线地域，内网INTERNAL，无库/无条目UNKNOWN。
+所有合法请求均计数，无需pathRules；普通未知路径保留可区分的脱敏结构，不再归UNMATCHED或报UNMATCHED_PATH。路径先去query/fragment，最多两轮严格百分号解码、NFC；敏感字段值、邮箱/手机/IP/UUID/JWT/长随机串用既有日密钥的独立risk-path-v1用途HMAC脱敏，缺密钥固定marker加KEY_UNAVAILABLE。完整路径最多512 Unicode码点，超长保留脱敏前缀和全路径摘要。旧规则只作可选分组，模板也再次脱敏，不能过滤计数或泄露原值。固定分类优先RISK_INTERNAL→三条已知SSE→STATIC→API→PAGE→OTHER；API自动识别四模块/admin/api、/app/api、/openapi/api、/scheduler/api及/stock部署前缀，并覆盖现有Python /internal路由；不合规路径用固定安全路径且仍计数。历史UNMATCHED仍可读取。没有可信规则时IP未知；可信链从右往左判断，不信任假代理头。IP只在内存用于日HMAC/p12 HLL及离线地域，内网INTERNAL，无库/无条目UNKNOWN。
 
 不持久化Token/Cookie/Authorization/密码/请求体/查询参数/Referer/完整UA/IP/原异常正文。坏行只输出固定原因、源别名、代次、首偏移与该段数量。Redis只存schema聚合，无逐请求明细。304正常，499单列；最终HTTP错误与上游失败尝试分别计。SSE使用日志结束时间与连接持续时间独立分布，不推断在线人数/消息量。来源仅同日同keyId合并HLL，不能加和单元估算或跨日union。
 
 `examples/nginx-risk.conf.example` 使用escape=json并保留真实路径占位；Nginx本地日志本身仍受服务器原权限/保留策略管理。验证及未实测边界见 `docs/verification.md`。
+
+2026-10-30路径增量：精确算法和66个跨语言样例在包内 `risk/assets/risk-v1/{protocol.md,path-fixtures.json}`。启发式无法识别任意伪装成普通文字的秘密，不宣称绝对隐私保证。Java须先支持新路径schema/Unicode/canonical样例，再允许实际接入；本轮仅离线，不启动实际collector。

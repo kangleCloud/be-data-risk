@@ -10,7 +10,7 @@ from risk.parsing import PrivacyPolicy, PathRule, Rejected, REASONS, parse_event
 
 class CorrectionsTest(unittest.TestCase):
     def event(self, **updates):
-        value = {'@timestamp': '2026-10-27T12:00:00+08:00', 'uri': '/events',
+        value = {'@timestamp': '2026-10-27T12:00:00+08:00', 'uri': '/market/dashboard/stream',
                  'status': 200, 'request_time': '600.1234569'}
         value.update(updates)
         return json.dumps(value).encode()
@@ -30,7 +30,7 @@ class CorrectionsTest(unittest.TestCase):
             self.assertEqual(caught.exception.reason, 'INVALID_TIME')
 
     def test_sse_duration_preserved(self):
-        policy = PrivacyPolicy([PathRule('/events', '/events', 'SSE')])
+        policy = PrivacyPolicy([PathRule('/market/dashboard/stream', '/market/dashboard/stream', 'SSE')])
         event = parse_event(self.event(), policy)
         self.assertEqual(event['request_type'], 'SSE')
         self.assertEqual(event['duration_micros'], 600123457)
