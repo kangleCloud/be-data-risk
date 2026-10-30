@@ -24,7 +24,7 @@ python3 -m venv .venv
 
 ```sh
 cp .env.example .env.dev
-# 编辑 .env.dev，填写日志源、密钥文件及实际 Redis 连接
+# 编辑 .env.dev，填写日志源、HMAC_KEY及实际Redis连接
 .venv/bin/python -m risk --config .env.dev
 ```
 
@@ -32,7 +32,7 @@ cp .env.example .env.dev
 
 只支持单行赋值、注释、单/双引号，不执行shell、不插值、不自动从进程环境覆盖文件；布尔值为 `true/false`。含空格或 `#` 的字符串必须加引号。由 `--config` 选文件，不添加 `APP_ENV`。`.env`/`.env.dev`/`.env.prod`均被Git忽略，不覆盖已有私有文件。迁移工具同样支持 `--config .env.dev`。
 
-原 `RISK_*` 命名和JSON配置继续兼容；需 `rediss://`/`unix://` 或完整URI时使用原 `RISK_REDIS_URL`，不能与分开的 `REDIS_*` 同填。同一项新旧名字冲突时明确拒绝。多源仍可使用 `RISK_SOURCES` JSON数组替代单源路径；高级 `PATH_RULES` 仍用单引号包裹JSON。
+Redis等已有 `RISK_*` 命名和JSON配置继续支持；HMAC只使用直接值 `HMAC_KEY`（JSON为`hmacKey`），不再接受密钥文件配置。需 `rediss://`/`unix://` 或完整URI时使用原 `RISK_REDIS_URL`，不能与分开的 `REDIS_*` 同填。同一项新旧名字冲突时明确拒绝。多源仍可使用 `RISK_SOURCES` JSON数组替代单源路径；高级 `PATH_RULES` 仍用单引号包裹JSON。
 
 
 复制 `examples/config.example.json` 为 Git 忽略的 `config.local.json`。默认源列表和 Redis 地址为空，不自动连接任何服务器。按已核实的配置填写：
@@ -41,7 +41,7 @@ cp .env.example .env.dev
 | --- | --- |
 | sources | `{alias,path}`；稳定的非敏感别名与实际绝对日志路径 |
 | redisUrl | 明确指定单实例 Redis 连接，支持 redis/rediss/unix；与行情键以 namespace 隔离 |
-| hmacKeyFile | 本机至少32字节随机密钥文件，读取完整原始字节；不输出/上传/写Redis |
+| hmacKey | `.env` 使用 `HMAC_KEY` 直接填写至少32字节的随机密钥文本；UTF-8原样使用，不做hex/base64解码，不输出/上传/写Redis |
 | geoDatabase | 获许可的本地 MaxMind 库；缺失或无法加载返回未知并固定告警，不查询外网 |
 | trustedProxies | 经核实的可信代理 CIDR，默认空 |
 | directPeerTrusted | 是否明确允许采信 remote_addr，默认false |
@@ -58,7 +58,7 @@ cp .env.example .env.dev
 
 正常运行持续采集；已有 `--once` 仅用于本地/隔离验收，处理当前完整行后提交缓冲退出，不创建业务API或jobId。SIGTERM/SIGINT停止读取后尽力提交剩余缓冲，租约或Redis不可用则不冒充成功；以token比较释放lease。Redis暂时不可用保留待提交段重试，其他协议冲突安全停止，不重造批次盲试。
 
-专用用户只读日志；私有配置和密钥仅服务用户可读。模板所有生产用户/目录/配置路径保持占位，需运维核实systemd隔离可见性。未配置密钥时不生成SOURCE，可信IP计KEY_UNAVAILABLE，批次keyId固定unavailable；同日启用/换key将明确冲突，不能静默改变。
+专用用户只读日志；私有配置和密钥仅服务用户可读。模板所有生产用户/目录/配置路径保持占位，需运维核实systemd隔离可见性。未配置密钥时不生成SOURCE，可信IP计KEY_UNAVAILABLE，批次keyId固定unavailable；同日启用/换key将明确冲突，不能静默改变。真实HMAC_KEY只填写在Git忽略的环境文件中，至少32字节且应随机生成；不再读取密钥文件。
 
 ## systemd 生产配置
 
@@ -66,7 +66,7 @@ cp .env.example .env.dev
 
 服务使用root用户、网络就绪后启动、失败5秒重启，SIGTERM停止最多等待60秒。入口为 `.venv/bin/python -m risk --config /data/content/be-data-risk/.env.prod`；本项目通过显式配置文件选生产环境，不设置APP_ENV。保留Python无缓冲输出与统一文件日志。
 
-安装前准备项目 `.venv`/依赖、填写 `.env.prod` 的真实Redis/日志源/密钥路径，并创建可写的 `/data/logs/be-data-risk` 目录；systemd不会替你创建该父目录。源日志只读、私有配置与密钥权限需核实。此文件仅生成，未复制到 `/etc/systemd/system`、未启动或部署；本机没有systemd-analyze，目标Linux上需执行 `systemd-analyze verify deploy/systemd/be-data-risk.service` 核验。
+安装前准备项目 `.venv`/依赖、填写 `.env.prod` 的真实Redis/日志源/HMAC_KEY，并创建可写的 `/data/logs/be-data-risk` 目录；systemd不会替你创建该父目录。源日志只读、私有配置文件权限需核实。此文件仅生成，未复制到 `/etc/systemd/system`、未启动或部署；本机没有systemd-analyze，目标Linux上需执行 `systemd-analyze verify deploy/systemd/be-data-risk.service` 核验。
 
 ## 不可变发布与恢复
 

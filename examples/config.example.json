@@ -1,7 +1,7 @@
 {
   "sources": [],
   "redisUrl": null,
-  "hmacKeyFile": null,
+  "hmacKey": null,
   "geoDatabase": null,
   "pathRules": [],
   "trustedProxies": [],

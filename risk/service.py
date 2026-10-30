@@ -240,7 +240,7 @@ def run(config, once=False):
     import redis
     from .protocol import verify_assets
     verify_assets()
-    key = config.hmac_key_file.read_bytes() if config.hmac_key_file else None
+    key = config.hmac_key.encode('utf-8') if config.hmac_key else None
     if key is not None and len(key) < 32:
         raise ValueError('HMAC_KEY_TOO_SHORT')
     def diagnostic(value):

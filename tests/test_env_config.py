@@ -11,7 +11,7 @@ class EnvConfigTest(unittest.TestCase):
         old = load_config('examples/config.example.json')
         self.assertEqual(env.sources, old.sources)
         self.assertEqual(env.redis_url, 'redis://localhost:6379/2')
-        self.assertIsNone(env.hmac_key_file)
+        self.assertIsNone(env.hmac_key)
         self.assertEqual(env.max_line_bytes, old.max_line_bytes)
         self.assertEqual(env.poll_millis, old.poll_millis)
         self.assertFalse(env.privacy.direct_peer_trusted)
@@ -88,3 +88,36 @@ class EnvConfigTest(unittest.TestCase):
             path = Path(directory) / 'config.json'
             path.write_text('{"redisUrl":"rediss://fake.invalid:1/3","sources":[]}')
             self.assertEqual(load_config(path).redis_url, 'rediss://fake.invalid:1/3')
+
+    def test_direct_hmac_value_preserves_bytes_and_is_not_in_repr(self):
+        secret = 'synthetic-direct-hmac-key-with-#-and-spaces 123'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / '.env.prod'
+            path.write_text("HMAC_KEY='" + secret + "'\n")
+            config = load_config(path)
+            self.assertEqual(config.hmac_key, secret)
+            self.assertNotIn(secret, repr(config))
+            json_path = Path(directory) / 'config.json'
+            json_path.write_text(json.dumps({'hmacKey': secret}))
+            self.assertEqual(load_config(json_path).hmac_key, secret)
+
+    def test_hmac_file_configuration_rejected_no_compatibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ['HMAC_KEY_FILE', 'RISK_HMAC_KEY_FILE']:
+                path = Path(directory) / '.env'
+                path.write_text(name + '=/tmp/not-a-real-key\n')
+                with self.assertRaises(ValueError):
+                    load_config(path)
+            path = Path(directory) / 'config.json'
+            path.write_text('{"hmacKeyFile":"/tmp/not-a-real-key"}')
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_short_or_wrong_type_inline_key_rejected_without_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            for value in ['synthetic-short-key', 123, True]:
+                path.write_text(json.dumps({'hmacKey': value}))
+                with self.assertRaises(ValueError) as caught:
+                    load_config(path)
+                self.assertEqual(str(caught.exception), 'INVALID_HMAC_KEY')

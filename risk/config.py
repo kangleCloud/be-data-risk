@@ -21,7 +21,7 @@ class Config:
     privacy: PrivacyPolicy
     max_line_bytes: int
     redis_url: str | None = field(default=None, repr=False)
-    hmac_key_file: Path | None = field(default=None, repr=False)
+    hmac_key: str | None = field(default=None, repr=False)
     geo_database: Path | None = None
     poll_millis: int = 200
 
@@ -37,14 +37,13 @@ def _local_path(value):
 _ENV_FIELDS = {
     'RISK_SOURCES': ('sources', True),
     'RISK_REDIS_URL': ('redisUrl', False),
-    'RISK_HMAC_KEY_FILE': ('hmacKeyFile', False),
     'RISK_GEO_DATABASE': ('geoDatabase', False),
     'RISK_PATH_RULES': ('pathRules', True),
     'RISK_TRUSTED_PROXIES': ('trustedProxies', True),
     'RISK_DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
     'RISK_MAX_LINE_BYTES': ('maxLineBytes', True),
     'RISK_POLL_MILLIS': ('pollMillis', True),
-    'HMAC_KEY_FILE': ('hmacKeyFile', False),
+    'HMAC_KEY': ('hmacKey', False),
     'GEO_DATABASE': ('geoDatabase', False),
     'PATH_RULES': ('pathRules', True),
     'DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
@@ -123,7 +122,7 @@ def load_config(path):
     raw = file.read_bytes()
     value = _env_config(raw) if file.name.startswith('.env') or file.suffix == '.env' else strict_json(raw)
     if set(value) - {'sources', 'pathRules', 'trustedProxies', 'directPeerTrusted', 'maxLineBytes',
-                     'redisUrl', 'hmacKeyFile', 'geoDatabase', 'pollMillis'}:
+                     'redisUrl', 'hmacKey', 'geoDatabase', 'pollMillis'}:
         raise ValueError('UNKNOWN_CONFIG_FIELD')
     sources = []
     entries = value.get('sources', [])
@@ -167,5 +166,17 @@ def load_config(path):
     redis_url = value.get('redisUrl')
     if redis_url is not None and (not isinstance(redis_url, str) or not redis_url.startswith(('redis://', 'rediss://', 'unix://'))):
         raise ValueError('INVALID_REDIS_CONFIG')
+    hmac_key = value.get('hmacKey')
+    if hmac_key is not None:
+        if not isinstance(hmac_key, str):
+            raise ValueError('INVALID_HMAC_KEY')
+        if not hmac_key:
+            hmac_key = None
+        else:
+            try:
+                if len(hmac_key.encode('utf-8')) < 32:
+                    raise ValueError()
+            except (ValueError, UnicodeError):
+                raise ValueError('INVALID_HMAC_KEY') from None
     return Config(tuple(sources), PrivacyPolicy(rules, proxies, direct), limit, redis_url,
-                  _local_path(value.get('hmacKeyFile')), _local_path(value.get('geoDatabase')), poll)
+                  hmac_key, _local_path(value.get('geoDatabase')), poll)

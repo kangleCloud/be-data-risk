@@ -182,11 +182,20 @@ class RuntimeTest(unittest.TestCase):
         self.assertFalse(self.client.exists(PREFIX+'lease:sample'))
 
     def test_short_key_fails_before_connection(self):
-        key=self.root/'local.key';key.write_bytes(b'short')
-        value=json.loads(self.path.read_text());value['hmacKeyFile']=str(key)
+        value=json.loads(self.path.read_text());value['hmacKey']='short'
         self.path.write_text(json.dumps(value))
         with patch('redis.Redis.from_url') as factory,self.assertRaises(ValueError): run(load_config(self.path),once=True)
         factory.assert_not_called()
+
+    def test_direct_key_used_by_real_collector_without_key_file(self):
+        import hashlib
+        secret='synthetic-inline-hmac-service-key-32-bytes'
+        value=json.loads(self.path.read_text());value['hmacKey']=secret
+        self.path.write_text(json.dumps(value))
+        with patch('redis.Redis.from_url',return_value=self.client): run(load_config(self.path),once=True)
+        self.assertEqual(self.client.hget(PREFIX+'day-key-ids','2026-10-28'),hashlib.sha256(secret.encode()).hexdigest()[:32])
+        for batch in self.client.smembers(PREFIX+'pending:2026-10-28'):
+            self.assertNotIn(secret,self.client.get(PREFIX+'batch:2026-10-28:'+batch))
 
     def test_sigterm_flushes_buffer_and_restores_handler(self):
         previous=signal.getsignal(signal.SIGTERM)
