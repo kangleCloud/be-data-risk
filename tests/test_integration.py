@@ -1,3 +1,4 @@
+from test_assets import asset
 """Immutable V1 Collector with real shared Lua executed by fakeredis/Lupa."""
 from dataclasses import replace
 import json
@@ -12,7 +13,7 @@ from risk.aggregation import merge
 from risk.algorithms import HLL, canonical, checksum
 from risk.config import Config, SourceConfig
 from risk.parsing import PathRule, PrivacyPolicy
-from risk.protocol import asset, validate_envelope, verify_assets
+from risk.protocol import validate_envelope, verify_assets
 from risk.service import Collector
 from risk.storage import PREFIX, RedisStore, StorageError
 from risk.tailer import restore_checkpoint
@@ -39,13 +40,14 @@ class CollectorTest(unittest.TestCase):
         self.addCleanup(self.client.close)
         self.store = RedisStore(self.client)
         self.source = SourceConfig('source_test', self.path)
-        self.policy = PrivacyPolicy([PathRule('/api/sample', '/api/sample', 'API'), PathRule('/market/dashboard/stream', '/market/dashboard/stream', 'SSE')], direct_peer_trusted=True)
+        self.policy = PrivacyPolicy([PathRule('/api/sample', '/api/sample'), PathRule('/market/dashboard/stream', '/market/dashboard/stream')], direct_peer_trusted=True)
         self.config = Config((self.source,), self.policy, 65536)
         self.time = 0.0
         self.collector = self.new_collector()
 
     def new_collector(self, key=KEY):
         collector = Collector(self.store, self.config, key, clock=lambda: NOW, monotonic=lambda: self.time)
+        collector.stage_limit = 1 # individual cursor tests; batching covered separately
         self.addCleanup(lambda: collector.close(flush=False))
         return collector
 
@@ -293,7 +295,7 @@ class CollectorTest(unittest.TestCase):
         self.collector.tick()
         self.assertEqual(self.count(), 1)
         self.assertEqual(len(self.batches()), 2)
-        self.assertEqual(sorted(env['recordCount'] for env in self.batches()), ['0', '2'])
+        self.assertEqual(sorted(env['recordCount'] for env in self.batches()), ['0', '3'])
         self.collector.tick(); self.collector.flush_all()
         self.assertEqual(self.count(), 2)
 
@@ -368,13 +370,13 @@ class CollectorTest(unittest.TestCase):
         with patch('risk.service.MAX_BYTES', 1):
             with self.assertRaises(StorageError) as caught: self.collector.tick()
         self.assertEqual(caught.exception.code, 'RECORD_TOO_LARGE')
-        self.assertEqual(self.collector.states[self.source.alias].reader.checkpoint.offset, 0)
+        self.assertEqual(len(self.collector.states[self.source.alias].staged), 1)
         self.assertIsNone(self.store.checkpoint(self.source.alias))
 
     def test_500_distinct_records_flush_before_adding_next(self):
         self.collector.close(flush=False)
         self.policy.direct_peer_trusted = False
-        self.policy.rules = [( __import__('re').compile('/'+str(index)), '/'+str(index), 'API') for index in range(501)]
+        self.policy.rules = [( __import__('re').compile('/'+str(index)), '/'+str(index)) for index in range(501)]
         lines = [log(uri='/'+str(index)) for index in range(500)]
         self.path.write_bytes(b''.join(lines))
         with patch('time.time', return_value=1000):
@@ -382,16 +384,20 @@ class CollectorTest(unittest.TestCase):
             self.drain(other); other.flush_all()
         envs = self.batches()
         self.assertEqual(len(envs), 2)
-        self.assertEqual(sorted(env['recordCount'] for env in envs), ['2', '500'])
+        self.assertEqual(sorted(env['recordCount'] for env in envs), ['4', '500'])
         self.assertEqual(self.count(), 500)
 
     def test_actual_one_mib_limit_flushes_without_losing_lines(self):
         self.collector.close(flush=False)
-        self.policy.geo = lambda address: chr(65 + int(address.split('.')[-1]) // 26) + chr(65 + int(address.split('.')[-1]) % 26)
+        from risk.geo import GeoOutcome
+        class FakeGeo:
+            def resolve_many(self, addresses, **kwargs):
+                return {a:GeoOutcome(chr(65+int(a.split('.')[-1])//26)+chr(65+int(a.split('.')[-1])%26),(),{'resultStatus':'SUCCESS'}) for a in addresses}
         lines = [log(remote_addr='11.0.0.'+str(index)) for index in range(190)]
         self.path.write_bytes(b''.join(lines))
         with patch('time.time', return_value=1000):
             other = self.new_collector()
+            other.geo = FakeGeo()
             self.drain(other); other.flush_all()
         envs = self.batches()
         self.assertGreaterEqual(len(envs), 2)

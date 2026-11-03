@@ -22,8 +22,9 @@ class Config:
     max_line_bytes: int
     redis_url: str | None = field(default=None, repr=False)
     hmac_key: str | None = field(default=None, repr=False)
-    geo_database: Path | None = None
     poll_millis: int = 200
+    geo_service_url: str | None = None
+    geo_service_token: str | None = field(default=None, repr=False)
 
 
 def _local_path(value):
@@ -35,16 +36,10 @@ def _local_path(value):
 
 
 _ENV_FIELDS = {
-    'RISK_SOURCES': ('sources', True),
-    'RISK_REDIS_URL': ('redisUrl', False),
-    'RISK_GEO_DATABASE': ('geoDatabase', False),
-    'RISK_PATH_RULES': ('pathRules', True),
-    'RISK_TRUSTED_PROXIES': ('trustedProxies', True),
-    'RISK_DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
-    'RISK_MAX_LINE_BYTES': ('maxLineBytes', True),
-    'RISK_POLL_MILLIS': ('pollMillis', True),
+    'SOURCES': ('sources', True),
+    'GEO_SERVICE_URL': ('geoServiceUrl', False),
+    'GEO_SERVICE_TOKEN': ('geoServiceToken', False),
     'HMAC_KEY': ('hmacKey', False),
-    'GEO_DATABASE': ('geoDatabase', False),
     'PATH_RULES': ('pathRules', True),
     'DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
     'MAX_LINE_BYTES': ('maxLineBytes', True),
@@ -122,7 +117,7 @@ def load_config(path):
     raw = file.read_bytes()
     value = _env_config(raw) if file.name.startswith('.env') or file.suffix == '.env' else strict_json(raw)
     if set(value) - {'sources', 'pathRules', 'trustedProxies', 'directPeerTrusted', 'maxLineBytes',
-                     'redisUrl', 'hmacKey', 'geoDatabase', 'pollMillis'}:
+                     'redisUrl', 'hmacKey', 'pollMillis', 'geoServiceUrl', 'geoServiceToken'}:
         raise ValueError('UNKNOWN_CONFIG_FIELD')
     sources = []
     entries = value.get('sources', [])
@@ -157,9 +152,9 @@ def load_config(path):
     if not isinstance(entries, list):
         raise ValueError('INVALID_PATH_RULE')
     for item in entries:
-        if not isinstance(item, dict) or set(item) != {'pattern', 'template', 'requestType'} or not all(isinstance(entry, str) for entry in item.values()):
+        if not isinstance(item, dict) or set(item) != {'pattern', 'template'} or not all(isinstance(entry, str) for entry in item.values()):
             raise ValueError('INVALID_PATH_RULE')
-        rules.append(PathRule(item['pattern'], item['template'], item['requestType']))
+        rules.append(PathRule(item['pattern'], item['template']))
     proxies = value.get('trustedProxies', [])
     if not isinstance(proxies, list) or not all(isinstance(entry, str) for entry in proxies):
         raise ValueError('INVALID_TRUSTED_PROXY_CONFIG')
@@ -178,5 +173,10 @@ def load_config(path):
                     raise ValueError()
             except (ValueError, UnicodeError):
                 raise ValueError('INVALID_HMAC_KEY') from None
+    if value.get('geoServiceUrl'):
+        from .geo import InternalBatchHttp
+        InternalBatchHttp(value['geoServiceUrl'], value.get('geoServiceToken'))
+    elif value.get('geoServiceToken'):
+        raise ValueError('INVALID_GEO_SERVICE_CONFIG')
     return Config(tuple(sources), PrivacyPolicy(rules, proxies, direct), limit, redis_url,
-                  hmac_key, _local_path(value.get('geoDatabase')), poll)
+                  hmac_key, poll, value.get('geoServiceUrl'), value.get('geoServiceToken'))

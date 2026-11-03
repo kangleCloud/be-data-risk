@@ -1,3 +1,4 @@
+from test_assets import asset
 """Offline regression against shared assets; does not enable Redis integration."""
 import hashlib
 import json
@@ -30,7 +31,7 @@ class CorrectionsTest(unittest.TestCase):
             self.assertEqual(caught.exception.reason, 'INVALID_TIME')
 
     def test_sse_duration_preserved(self):
-        policy = PrivacyPolicy([PathRule('/market/dashboard/stream', '/market/dashboard/stream', 'SSE')])
+        policy = PrivacyPolicy([PathRule('/market/dashboard/stream', '/market/dashboard/stream')])
         event = parse_event(self.event(), policy)
         self.assertEqual(event['request_type'], 'SSE')
         self.assertEqual(event['duration_micros'], 600123457)
@@ -43,7 +44,7 @@ class CorrectionsTest(unittest.TestCase):
                 canonical(value)
 
     def test_shared_fixture(self):
-        fixture = json.loads((Path(__file__).resolve().parents[1] / 'risk/assets/risk-v1-fixtures.json').read_text())
+        fixture = json.loads(asset('risk-v1-fixtures.json'))
         line = fixture['canonicalRecordLine']
         record = json.loads(line)
         self.assertEqual(canonical(record) + b'\n', line.encode())
@@ -59,7 +60,8 @@ class CorrectionsTest(unittest.TestCase):
     def test_only_contract_reasons(self):
         self.assertEqual(REASONS, {'INVALID_JSON', 'INVALID_TIME', 'INVALID_NUMBER', 'UNMATCHED_PATH',
                          'UNTRUSTED_IP', 'GEO_UNAVAILABLE', 'HTTP_5XX', 'HTTP_4XX', 'CLIENT_ABORT',
-                         'UPSTREAM_FAILURE', 'SOURCE_TRUNCATED', 'KEY_UNAVAILABLE'})
+                         'UPSTREAM_FAILURE', 'SOURCE_TRUNCATED', 'KEY_UNAVAILABLE',
+                     'GEO_LOCAL_DEGRADED','GEO_SERVICE_UNAVAILABLE','GEO_VERSION_STALE','GEO_CODE_CONFLICT'})
         for raw in [b'\xff', b'[]', b'{"uri":"\\x"}']:
             with self.assertRaises(Rejected) as caught:
                 parse_event(raw, PrivacyPolicy())

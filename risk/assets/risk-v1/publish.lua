@@ -46,7 +46,7 @@ if fields~=8 or envelope.schemaVersion~=1 or envelope.batchId~=batch or envelope
 local previous=''
 local seen={}
 for idx,row in ipairs(envelope.records) do
- if type(row)~='table' or row.schemaVersion~=1 or type(row.recordId)~='string' or #row.recordId~=64 or not string.match(row.recordId,'^[a-f0-9]+$') or not ({COUNTER=true,SOURCE=true,EXCEPTION=true,QUALITY=true})[row.kind] or type(row.dimensions)~='table' or row.dimensions.kind~=row.kind or row.dimensions.businessDate~=day or (row.kind=='SOURCE' and row.keyId~=envelope.keyId) then return 'INVALID_ARGUMENT' end
+ if type(row)~='table' or row.schemaVersion~=1 or type(row.recordId)~='string' or #row.recordId~=64 or not string.match(row.recordId,'^[a-f0-9]+$') or not ({COUNTER=true,GEO_COUNTER=true,SOURCE=true,EXCEPTION=true,QUALITY=true})[row.kind] or type(row.dimensions)~='table' or row.dimensions.kind~=row.kind or row.dimensions.businessDate~=day or (row.kind=='SOURCE' and row.keyId~=envelope.keyId) then return 'INVALID_ARGUMENT' end
  if seen[row.recordId] then return 'INVALID_ARGUMENT' end
  seen[row.recordId]=true
  local order=row.kind..':'..row.recordId

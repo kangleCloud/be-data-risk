@@ -1,6 +1,7 @@
 include README.md .env.example requirements*.txt
 recursive-include risk/assets *
 recursive-include examples *.example *.json *.jsonl
-recursive-include tests *.py
+recursive-include tests *.py *.json
 recursive-include scripts *.py
+recursive-include tools *.py
 recursive-include deploy *.service

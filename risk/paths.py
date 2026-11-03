@@ -1,8 +1,8 @@
 """Executable risk-path-v1 contract; raw paths never escape this module."""
 from dataclasses import dataclass
+from datetime import date
 import hashlib
 import hmac
-import ipaddress
 import re
 import unicodedata
 from urllib.parse import unquote_to_bytes
@@ -10,7 +10,8 @@ from urllib.parse import unquote_to_bytes
 MAX_INPUT_BYTES = 16384
 MAX_PATH_POINTS = 512
 SENSITIVE = frozenset({'password', 'passwd', 'pwd', 'token', 'access_token', 'refresh_token',
-                       'secret', 'authorization', 'cookie', '密码', '令牌'})
+                       'secret', 'authorization', 'cookie', '密码', '令牌', '身份证', '身份证号',
+                       'idcard', 'id_card', 'identity_card', 'identity_number'})
 SSE_BASES = ('/market/dashboard/stream', '/stock-monitor/v1/stream', '/etf-monitor/v1/stream')
 SSE_PATHS = frozenset(prefix + base for prefix in ('', '/openapi/api', '/stock/openapi/api') for base in SSE_BASES)
 STATIC_SUFFIXES = frozenset('css js mjs map png jpg jpeg gif svg ico webp avif woff woff2 ttf eot txt xml pdf mp4 webm'.split())
@@ -67,8 +68,6 @@ def normalize(value, trusted_template=False):
 
 
 def valid_stored_path(value):
-    if value == 'UNMATCHED':
-        return True  # historical compatibility only
     if not isinstance(value, str) or not value.startswith('/') or len(value) > MAX_PATH_POINTS or unicodedata.normalize('NFC', value) != value or _controls(value):
         return False
     if any(char in value for char in '\\<>"`?#%'):
@@ -86,8 +85,6 @@ def valid_stored_path(value):
 
 
 def validate_template(value):
-    if value == 'UNMATCHED':
-        return
     if not isinstance(value, str) or '?' in value or '#' in value or '%' in value or len(value) > MAX_PATH_POINTS:
         raise ValueError('INVALID_TEMPLATE')
     try:
@@ -108,6 +105,8 @@ def digest(key, day, purpose, value):
 def _random(value):
     for match in RANDOM_RUN.finditer(value):
         run = match.group()
+        if run.isascii() and run.isdigit():
+            continue  # ordinary long numeric IDs are not automatically secrets or identity cards
         if re.fullmatch(r'[0-9A-Fa-f]{24,}', run) or (re.search('[A-Za-z]', run) and re.search('[0-9]', run)):
             return True
     return False
@@ -124,15 +123,21 @@ def _email(value):
     return False
 
 
-def _ip(value):
-    candidate = value.split('=', 1)[-1]
-    if candidate.startswith('[') and candidate.endswith(']'):
-        candidate = candidate[1:-1]
+_ID_PROVINCES = frozenset('11 12 13 14 15 21 22 23 31 32 33 34 35 36 37 41 42 43 44 45 46 50 51 52 53 54 61 62 63 64 65'.split())
+
+
+def _identity(value, business_date):
+    # Format recognition only, not verification of a real identity. No district dataset/model.
+    if not re.fullmatch(r'[0-9]{17}[0-9Xx]', value) or value[:2] not in _ID_PROVINCES or value[14:17] == '000':
+        return False
     try:
-        ipaddress.ip_address(candidate)
-        return True
+        born = date(int(value[6:10]), int(value[10:12]), int(value[12:14]))
+        if born.year < 1800 or born > date.fromisoformat(business_date):
+            return False
     except ValueError:
         return False
+    weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+    return value[-1].upper() == '10X98765432'[sum(int(digit) * weight for digit, weight in zip(value[:17], weights)) % 11]
 
 
 def redact(path, day, key):
@@ -155,7 +160,7 @@ def redact(path, day, key):
             pair = re.split(r'[=:]', segment, maxsplit=1)
             if len(pair) == 2 and pair[0].lower() in SENSITIVE:
                 output.append(pair[0] + segment[len(pair[0])] + mask(pair[1]))
-            elif _email(segment) or PHONE.search(segment) or UUID.search(segment) or JWT.search(segment) or _ip(segment) or _random(segment):
+            elif _email(segment) or PHONE.search(segment) or UUID.search(segment) or JWT.search(segment) or _identity(segment, day) or _random(segment):
                 output.append(mask(segment))
             else:
                 output.append(segment)
@@ -206,8 +211,8 @@ def protect_path(value, day, key, rules=()):
     kind = classify(normalized)
     result, changed, unavailable = redact(normalized, day, key)
     if not changed and kind not in {'RISK_INTERNAL', 'SSE'}:
-        for pattern, template, _legacy_kind in rules:
-            if template != 'UNMATCHED' and pattern.fullmatch(normalized):
+        for pattern, template in rules:
+            if pattern.fullmatch(normalized):
                 result, _, missing = redact(normalize(template, trusted_template=True), day, key)
                 unavailable = unavailable or missing
                 break

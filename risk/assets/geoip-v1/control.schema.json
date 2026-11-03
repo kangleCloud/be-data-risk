@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cacheVersion",
+    "providerSetVersion",
+    "publishedAt"
+  ],
+  "properties": {
+    "cacheVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "providerSetVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "publishedAt": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -2,10 +2,11 @@
   "sources": [],
   "redisUrl": null,
   "hmacKey": null,
-  "geoDatabase": null,
   "pathRules": [],
   "trustedProxies": [],
   "directPeerTrusted": false,
   "maxLineBytes": 65536,
-  "pollMillis": 200
+  "pollMillis": 200,
+  "geoServiceUrl": null,
+  "geoServiceToken": null
 }

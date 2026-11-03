@@ -36,6 +36,13 @@ def event_records(event, source_id, hll, key_id):
                    bytesValidCount=str(int(size is not None)), durationValidCount=str(int(duration is not None)),
                    durationSumMicros=str(duration or 0), histogram=histogram,
                    upstreamFailureCount=str(event['upstream_failure_count']))]
+    geo = event.get('geo', {})
+    geo_dimensions = dict(base, minuteAt=minute)
+    for field in ('countryCode','provinceCode','provinceName','cityCode','cityName'):
+        geo_dimensions[field] = geo.get(field) or ''
+    geo_dimensions['locationLevel'] = geo.get('locationLevel', 'UNKNOWN')
+    geo_dimensions['resultStatus'] = geo.get('resultStatus', 'UNKNOWN')
+    rows.append(record('GEO_COUNTER', geo_dimensions, requestCount='1'))
     if any(hll.registers):
         rows.append(record('SOURCE', base, registersBase64=hll.encode(), keyId=key_id))
     reasons = []
@@ -70,7 +77,7 @@ def merge(old, delta):
         registers.merge(HLL.decode(delta['registersBase64']))
         result['registersBase64'] = registers.encode()
     else:
-        fields = ['count'] if kind in {'EXCEPTION', 'QUALITY'} else ['requestCount', 'bytesSum', 'bytesValidCount', 'durationValidCount', 'durationSumMicros', 'upstreamFailureCount']
+        fields = ['requestCount'] if kind == 'GEO_COUNTER' else ['count'] if kind in {'EXCEPTION', 'QUALITY'} else ['requestCount', 'bytesSum', 'bytesValidCount', 'durationValidCount', 'durationSumMicros', 'upstreamFailureCount']
         for field in fields:
             result[field] = str(int(old[field]) + int(delta[field]))
         if kind == 'COUNTER':

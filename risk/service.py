@@ -1,5 +1,6 @@
 """Per-source ten-second memory segments and immutable atomic V1 publication."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from collections import deque
 from datetime import datetime
 import hashlib
 import json
@@ -11,7 +12,7 @@ import uuid
 
 from .aggregation import event_records, quality_record, merge
 from .algorithms import HLL, canonical
-from .parsing import Rejected, SHANGHAI, parse_event
+from .parsing import Rejected, SHANGHAI, parse_observation
 from .protocol import MAX_BYTES, MAX_RECORDS, make_envelope
 from .storage import RedisStore, StorageError, Publication
 from .tailer import FileTailer, SourceError, checkpoint_json, restore_checkpoint
@@ -35,17 +36,19 @@ class SourceState:
     last_event: str = ''
     publication: Publication | None = None
     diagnostics: dict = field(default_factory=dict)
+    staged: deque = field(default_factory=deque)
 
 
 class Collector:
-    def __init__(self, store, config, key=None, clock=now_iso, monotonic=time.monotonic, diagnostic=None):
+    def __init__(self, store, config, key=None, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None):
         self.store, self.config, self.key = store, config, key
+        self.geo = geo
+        self.stage_limit = 100
         self.key_id = hashlib.sha256(key).hexdigest()[:32] if key else 'unavailable'
         self.clock, self.monotonic = clock, monotonic
         self.states = {}
         self.last_event = ''
         self.last_heartbeat = None
-        self.checked_migration = False
         self.diagnostic = diagnostic or (lambda value: None)
 
     def _discard(self, source):
@@ -68,7 +71,7 @@ class Collector:
         if state is not None:
             self._renew(source, state)
             return state
-        token = 'immutable-' + str(uuid.uuid4())
+        token = str(uuid.uuid4())
         if not self.store.acquire(source.alias, token):
             raise StorageError('LEASE_LOST')
         try:
@@ -114,6 +117,8 @@ class Collector:
         for source in self.config.sources:
             state = self.states.get(source.alias)
             if state is not None:
+                while state.staged:
+                    self.step(source)
                 self._flush(source, state)
 
     def _prospective(self, state, day, rows, now):
@@ -131,31 +136,69 @@ class Collector:
             raise ValueError('RECORD_TOO_LARGE')
         return merged
 
+    def _stage(self, source, state):
+        frames = []
+        addresses = []
+        started = self.monotonic()
+        try:
+            for _ in range(self.stage_limit):
+                candidate = state.reader.prepare()
+                if candidate is None:
+                    break
+                now, event_at = self.clock(), ''
+                day, event, hll, address = now[:10], None, HLL(), None
+                rows = []
+                if candidate.reason:
+                    reason = {'SOURCE_ROTATED': None, 'ROTATED_PARTIAL_LINE': 'INVALID_JSON',
+                              'LINE_TOO_LONG': 'INVALID_JSON'}.get(candidate.reason, candidate.reason)
+                    if reason:
+                        rows = [quality_record(day, source.alias, reason)]
+                else:
+                    try:
+                        event, address = parse_observation(candidate.raw, self.config.privacy, hll, self.key)
+                        day, event_at = event['business_date'], event['event_at']
+                        addresses.append(address)
+                    except Rejected as exc:
+                        rows = [quality_record(day, source.alias, exc.reason)]
+                # Retain sanitized event fields only; raw lines never enter staged memory.
+                frame = (replace(candidate, raw=None), now, day, event_at, event, hll, address, rows)
+                frames.append(frame)
+                state.reader.acknowledge(candidate)
+                if candidate.before.generation != candidate.after.generation:
+                    break
+        except SourceError:
+            if not frames:
+                raise
+        if not frames:
+            return
+        budget = min(.300, max(0, 10 - (self.monotonic() - (state.started_at if state.started_at is not None else started))))
+        from .geo import fallback_outcome
+        try:
+            outcomes = self.geo.resolve_many(addresses, budget=budget) if self.geo is not None else {}
+        except Exception:
+            outcomes = {}
+        for candidate, now, day, event_at, event, hll, address, rows in frames:
+            if event is not None:
+                outcome = outcomes.get(address, fallback_outcome(address))
+                event['region_code'] = outcome.region_code
+                event['geo'] = outcome.result or {}
+                event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
+                rows = event_records(event, source.alias, hll, self.key_id)
+            state.staged.append((candidate, now, day, event_at, rows))
+        if frames and state.started_at is None:
+            state.started_at = started
+
     def step(self, source):
         state = self._state(source)
         if state.publication is not None:
             self._flush(source, state)  # uncertain result: retry identical bytes before reading any more.
         if state.started_at is not None and self.monotonic() - state.started_at >= 10:
             self._flush(source, state)
-        candidate = state.reader.prepare()
-        if candidate is None:
+        if not state.staged:
+            self._stage(source, state)
+        if not state.staged:
             return False
-        now, event_at = self.clock(), ''
-        day = now[:10]
-        rows = []
-        if candidate.reason:
-            reason = {'SOURCE_ROTATED': None, 'ROTATED_PARTIAL_LINE': 'INVALID_JSON',
-                      'LINE_TOO_LONG': 'INVALID_JSON'}.get(candidate.reason, candidate.reason)
-            if reason:
-                rows = [quality_record(day, source.alias, reason)]
-        else:
-            hll = HLL()
-            try:
-                event = parse_event(candidate.raw, self.config.privacy, hll, self.key)
-                day, event_at = event['business_date'], event['event_at']
-                rows = event_records(event, source.alias, hll, self.key_id)
-            except Rejected as exc:
-                rows = [quality_record(day, source.alias, exc.reason)]
+        candidate, now, day, event_at, rows = state.staged[0]
         transition = candidate.before.generation != candidate.after.generation
         if state.day is not None and (state.day != day or transition):
             self._flush(source, state)
@@ -171,7 +214,9 @@ class Collector:
             except ValueError:
                 raise StorageError('RECORD_TOO_LARGE') from None
         if state.day is None:
-            state.day, state.batch_id, state.started_at = day, str(uuid.uuid4()), self.monotonic()
+            state.day, state.batch_id = day, str(uuid.uuid4())
+            if state.started_at is None:
+                state.started_at = self.monotonic()
         state.rows = prospective
         state.end_checkpoint = checkpoint_json(candidate.after)
         state.last_event = max(state.last_event, event_at)
@@ -181,16 +226,12 @@ class Collector:
                                                      {'generation': candidate.before.generation, 'offset': str(candidate.before.offset), 'count': '0'})
                 info['count'] = str(int(info['count']) + 1)
         # This advances only the in-memory read cursor, NEVER the durable checkpoint.
-        state.reader.acknowledge(candidate)
+        state.staged.popleft()
         if transition or len(state.rows) == MAX_RECORDS or self.monotonic() - state.started_at >= 10:
             self._flush(source, state)
         return True
 
     def tick(self):
-        if not self.checked_migration:
-            from .migrate import guard_startup
-            guard_startup(self.store.client)
-            self.checked_migration = True
         progress = False
         for source in self.config.sources:
             progress = self.step(source) or progress
@@ -218,6 +259,9 @@ class Collector:
             if state is None:
                 continue
             try:
+                if flush:
+                    while state.staged:
+                        self.step(source)
                 if flush and state.end_checkpoint is not None:
                     self._renew(source, state, force=True)
                     self._flush(source, state)
@@ -245,20 +289,16 @@ def run(config, once=False):
         raise ValueError('HMAC_KEY_TOO_SHORT')
     def diagnostic(value):
         print(json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
-    geo = None
-    if config.geo_database is not None:
-        try:
-            from .geo import OfflineGeo
-            geo = OfflineGeo(config.geo_database)
-        except Exception:
-            diagnostic({'code': 'GEO_UNAVAILABLE'})
-        config.privacy.geo = geo
+    from .geo import UnifiedGeoClient, InternalBatchHttp, make_geo_cache_client
+    geo_cache = make_geo_cache_client(config.redis_url)
+    transport = InternalBatchHttp(config.geo_service_url, config.geo_service_token) if config.geo_service_url else None
+    geo = UnifiedGeoClient(geo_cache, transport)
     client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
     stop = threading.Event()
     previous_handlers = {}
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.signal(signum, lambda *_: stop.set())
-    collector = Collector(RedisStore(client), config, key, diagnostic=diagnostic)
+    collector = Collector(RedisStore(client), config, key, diagnostic=diagnostic, geo=geo)
     try:
         while not stop.is_set():
             try:
@@ -267,20 +307,16 @@ def run(config, once=False):
                     return  # finally flushes the remaining partial segment.
                 if not progress:
                     stop.wait(collector.wait_seconds())
-            except SourceError as exc:
-                diagnostic({'code': exc.code})
-                raise
             except StorageError as exc:
-                diagnostic({'code': exc.code})
                 if once or exc.code != 'REDIS_UNAVAILABLE':
                     raise
+                diagnostic({'code': exc.code})
                 stop.wait(1)
     finally:
         try:
             collector.close()
         finally:
             client.close()
-            if geo is not None:
-                geo.close()
+            geo_cache.close()
             for signum, previous in previous_handlers.items():
                 signal.signal(signum, previous)

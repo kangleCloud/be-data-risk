@@ -1,3 +1,4 @@
+from test_assets import asset
 import contextlib
 import copy
 import io
@@ -12,7 +13,7 @@ import fakeredis
 from risk.__main__ import main
 from risk.algorithms import canonical
 from risk.config import load_config
-from risk.protocol import asset
+
 from risk.service import run
 from risk.storage import PREFIX, RedisStore
 
@@ -172,15 +173,6 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(main(),1)
         self.assertEqual(output.getvalue(),'{"code":"COLLECTOR_STOPPED"}\n')
 
-    def test_migration_required_is_fixed_diagnostic(self):
-        self.client.hset(PREFIX+'directory','old','2026-10-28')
-        output=io.StringIO()
-        with patch('redis.Redis.from_url',return_value=self.client),patch('sys.argv',['risk','--config',str(self.path),'--once']),contextlib.redirect_stderr(output):
-            self.assertEqual(main(),1)
-        self.assertIn('MIGRATION_REQUIRED',output.getvalue())
-        self.assertFalse(self.client.exists(PREFIX+'days'))
-        self.assertFalse(self.client.exists(PREFIX+'lease:sample'))
-
     def test_short_key_fails_before_connection(self):
         value=json.loads(self.path.read_text());value['hmacKey']='short'
         self.path.write_text(json.dumps(value))
@@ -208,13 +200,6 @@ class RuntimeTest(unittest.TestCase):
         self.assertIsNone(self.client.get(PREFIX+'lease:sample'))
         self.assertIsNotNone(self.client.hget(PREFIX+'checkpoints','sample'))
 
-    def test_missing_optional_geo_unknown_no_external_query(self):
-        value=json.loads(self.path.read_text());value['geoDatabase']=str(self.root/'absent.mmdb')
-        self.path.write_text(json.dumps(value))
-        output=io.StringIO()
-        with patch('redis.Redis.from_url',return_value=self.client),contextlib.redirect_stderr(output): run(load_config(self.path),once=True)
-        self.assertIn('GEO_UNAVAILABLE',output.getvalue())
-        self.assertNotIn('absent.mmdb',output.getvalue())
 class SourceAvailabilityTest(unittest.TestCase):
     def setUp(self):
         from risk.config import Config, SourceConfig
@@ -274,3 +259,27 @@ class SourceAvailabilityTest(unittest.TestCase):
     def test_normal_readable_eof_can_heartbeat(self):
         self.assertFalse(self.collector.tick())
         self.assertEqual(self.client.hget(PREFIX + 'heartbeat', 'collectorHeartbeatAt'), NOW)
+
+class CurrentStartupTest(unittest.TestCase):
+    def test_startup_does_not_inventory_redis_layout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'sample.log';path.write_text('{"@timestamp":"2026-11-02T10:00:00+08:00","uri":"/api/test"}\n')
+            config_path=Path(folder)/'config.json';config_path.write_text(json.dumps({'redisUrl':'redis://fake.invalid:1/2','sources':[{'alias':'sample','path':str(path)}]}))
+            client=fakeredis.FakeRedis(decode_responses=True)
+            try:
+                with patch('redis.Redis.from_url',return_value=client),patch.object(client,'scan',side_effect=AssertionError('inventory')),patch.object(client,'scan_iter',side_effect=AssertionError('inventory')):
+                    run(load_config(config_path),once=True)
+                self.assertIsNotNone(client.hget(PREFIX+'checkpoints','sample'))
+            finally:client.close()
+
+    def test_new_startup_storage_failure_is_reported(self):
+        from redis.exceptions import ConnectionError
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'sample.log';path.write_text('')
+            config_path=Path(folder)/'config.json';config_path.write_text(json.dumps({'redisUrl':'redis://fake.invalid:1/2','sources':[{'alias':'sample','path':str(path)}]}))
+            client=fakeredis.FakeRedis(decode_responses=True);output=io.StringIO()
+            try:
+                with patch('redis.Redis.from_url',return_value=client),patch.object(client,'set',side_effect=ConnectionError('synthetic-private-secret')),patch('sys.argv',['risk','--config',str(config_path),'--once']),contextlib.redirect_stderr(output):
+                    self.assertEqual(main(),1)
+                self.assertEqual(json.loads(output.getvalue()),{'code':'REDIS_UNAVAILABLE'})
+            finally:client.close()

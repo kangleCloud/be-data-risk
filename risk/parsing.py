@@ -7,12 +7,15 @@ import json
 import re
 from zoneinfo import ZoneInfo
 from .algorithms import micros, number
+from .ip_address import canonical_ip, public_ip
 from .paths import protect_path, validate_template
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 REASONS = frozenset({'INVALID_JSON', 'INVALID_TIME', 'INVALID_NUMBER', 'UNMATCHED_PATH',
                      'UNTRUSTED_IP', 'GEO_UNAVAILABLE', 'HTTP_5XX', 'HTTP_4XX',
-                     'CLIENT_ABORT', 'UPSTREAM_FAILURE', 'SOURCE_TRUNCATED', 'KEY_UNAVAILABLE'})
+                     'CLIENT_ABORT', 'UPSTREAM_FAILURE', 'SOURCE_TRUNCATED', 'KEY_UNAVAILABLE',
+                     'GEO_LOCAL_DEGRADED',
+                     'GEO_SERVICE_UNAVAILABLE', 'GEO_VERSION_STALE', 'GEO_CODE_CONFLICT'})
 
 
 class Rejected(ValueError):
@@ -50,19 +53,15 @@ def strict_json(raw):
 class PathRule:
     pattern: str
     template: str
-    request_type: str
 
 
 class PrivacyPolicy:
-    def __init__(self, rules=(), trusted_proxies=(), direct_peer_trusted=False, geo=None):
-        self.rules = [(re.compile(rule.pattern), rule.template, rule.request_type) for rule in rules]
-        for _, template, _ in self.rules:
+    def __init__(self, rules=(), trusted_proxies=(), direct_peer_trusted=False):
+        self.rules = [(re.compile(rule.pattern), rule.template) for rule in rules]
+        for _, template in self.rules:
             validate_template(template)
-        if any(kind not in {'API', 'STATIC', 'PAGE', 'SSE', 'RISK_INTERNAL', 'OTHER'} for _, _, kind in self.rules):
-            raise ValueError('INVALID_RULE')
         self.networks = tuple(ipaddress.ip_network(value) for value in trusted_proxies)
         self.direct_peer_trusted = direct_peer_trusted
-        self.geo = geo
 
     def protected_path(self, value, business_date, key=None):
         return protect_path(value, business_date, key, self.rules)
@@ -87,23 +86,14 @@ class PrivacyPolicy:
                             break
             elif not self.direct_peer_trusted:
                 return None
-            return address.compressed.lower()
+            return canonical_ip(address.compressed.lower())
         except (ValueError, TypeError):
             return None
 
     def region(self, address):
         if address is None:
             return 'UNKNOWN'
-        parsed = ipaddress.ip_address(address)
-        if parsed.is_private or parsed.is_loopback or parsed.is_link_local:
-            return 'INTERNAL'
-        if self.geo is None:
-            return 'UNKNOWN'
-        try:
-            result = self.geo(address)
-            return result if isinstance(result, str) and re.fullmatch(r'(?:[A-Z]{2}|CN-[A-Z0-9]{2})', result) else 'UNKNOWN'
-        except Exception:
-            return 'UNKNOWN'
+        return 'UNKNOWN' if public_ip(address) else 'INTERNAL'
 
 
 def ua_class(value):
@@ -124,7 +114,7 @@ def _integer(value):
     return int(parsed)
 
 
-def parse_event(raw, policy, hll=None, hmac_key=None):
+def parse_observation(raw, policy, hll=None, hmac_key=None):
     data = strict_json(raw)
     try:
         timestamp = data.get('@timestamp', data.get('time_iso8601'))
@@ -164,8 +154,6 @@ def parse_event(raw, policy, hll=None, hmac_key=None):
         region = policy.region(address)
         if address is None:
             quality.add('UNTRUSTED_IP')
-        elif region == 'UNKNOWN':
-            quality.add('GEO_UNAVAILABLE')
         if address is not None and not hmac_key:
             quality.add('KEY_UNAVAILABLE')
         event = {'event_at': instant.isoformat(timespec='milliseconds'), 'business_date': instant.date().isoformat(),
@@ -187,8 +175,16 @@ def parse_event(raw, policy, hll=None, hmac_key=None):
         if address is not None and hll is not None and hmac_key:
             hll.add(hmac_key, event['business_date'], address)
         event['quality'] = sorted(quality)
-        return event
+        return event, address
     except Rejected:
         raise
     except (ValueError, TypeError, InvalidOperation):
         raise Rejected('INVALID_NUMBER') from None
+
+
+def parse_event(raw, policy, hll=None, hmac_key=None):
+    """Offline parsing convenience; production resolves observations in real batches."""
+    event, address = parse_observation(raw, policy, hll, hmac_key)
+    if address is not None and public_ip(address):
+        event['quality'] = sorted(set(event['quality']) | {'GEO_SERVICE_UNAVAILABLE'})
+    return event

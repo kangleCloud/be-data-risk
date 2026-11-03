@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IpGeoResult V1.2 offline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "countryCode",
+    "provinceCode",
+    "provinceName",
+    "cityCode",
+    "cityName",
+    "errorCode",
+    "longitude",
+    "latitude",
+    "pointType",
+    "ip",
+    "regionCode",
+    "resolvedAt",
+    "ipVersion",
+    "geoGroup",
+    "locationLevel",
+    "source",
+    "resultStatus",
+    "coordinateSystem",
+    "cityGeoNameId",
+    "databaseVersion",
+    "cacheVersion",
+    "expiresAt",
+    "fieldSources",
+    "databaseVersions",
+    "conflictFields"
+  ],
+  "properties": {
+    "countryCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provinceCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provinceName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$",
+      "description": "Unicode NFC; reject Cc/Cf/Cs/Zl/Zp semantically; max 512 code points"
+    },
+    "cityCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cityName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$",
+      "description": "Unicode NFC; reject Cc/Cf/Cs/Zl/Zp semantically; max 512 code points"
+    },
+    "errorCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "longitude": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "latitude": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pointType": {
+      "enum": [
+        "REGION_CENTER",
+        null
+      ]
+    },
+    "ip": {
+      "type": "string"
+    },
+    "regionCode": {
+      "type": "string"
+    },
+    "resolvedAt": {
+      "type": "string"
+    },
+    "ipVersion": {
+      "enum": [
+        4,
+        6
+      ]
+    },
+    "geoGroup": {
+      "enum": [
+        "CN_MAINLAND",
+        "HK",
+        "MO",
+        "TW",
+        "FOREIGN",
+        "UNKNOWN",
+        "NON_PUBLIC",
+        "UNTRUSTED"
+      ]
+    },
+    "locationLevel": {
+      "enum": [
+        "COUNTRY",
+        "PROVINCE",
+        "CITY",
+        "UNKNOWN"
+      ]
+    },
+    "source": {
+      "enum": [
+        "DBIP",
+        "MAXMIND",
+        null
+      ]
+    },
+    "resultStatus": {
+      "enum": [
+        "SUCCESS",
+        "UNKNOWN",
+        "CONFLICT",
+        "INVALID_IP",
+        "NON_PUBLIC_IP",
+        "PROVIDER_UNAVAILABLE"
+      ]
+    },
+    "coordinateSystem": {
+      "enum": [
+        "WGS84"
+      ]
+    },
+    "cityGeoNameId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "databaseVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cacheVersion": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "type": "string"
+    },
+    "fieldSources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "country",
+        "province",
+        "city"
+      ],
+      "properties": {
+        "country": {
+          "enum": [
+            "DBIP",
+            "MAXMIND",
+            null
+          ]
+        },
+        "province": {
+          "enum": [
+            "DBIP",
+            "MAXMIND",
+            null
+          ]
+        },
+        "city": {
+          "enum": [
+            "DBIP",
+            "MAXMIND",
+            null
+          ]
+        }
+      }
+    },
+    "databaseVersions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "DBIP": {
+          "type": "string"
+        },
+        "MAXMIND": {
+          "type": "string"
+        }
+      }
+    },
+    "conflictFields": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "countryCode",
+          "provinceCode"
+        ]
+      }
+    }
+  }
+}

@@ -10,12 +10,11 @@ requires-python = ">=3.11"
 dependencies = ["redis>=5,<7", "jsonschema>=4,<5"]
 
 [project.optional-dependencies]
-test = ["fakeredis[lua]>=2.30,<3", "build>=1,<2", "maxminddb>=2,<4"]
-geo = ["maxminddb>=2,<4"]
+test = ["fakeredis[lua]>=2.30,<3", "build>=1,<2"]
 
 [tool.setuptools]
 packages = ["risk"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-risk = ["assets/*", "assets/risk-v1/*"]
+risk = ["assets/*", "assets/risk-v1/*", "assets/geoip-v1/*"]

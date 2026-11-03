@@ -4,7 +4,7 @@ import json
 import sys
 from .config import load_config
 from .parsing import PrivacyPolicy, Rejected, parse_event
-from .tailer import FileTailer
+from .tailer import FileTailer, SourceError
 
 
 def check_file(path):
@@ -47,7 +47,7 @@ def main():
             run(load_config(args.config), args.once)
     except Exception as exc:
         from .storage import StorageError
-        if isinstance(exc, StorageError):
+        if isinstance(exc, (StorageError, SourceError)):
             print(json.dumps({'code': exc.code}), file=sys.stderr)
             return 1
         # Configuration, OS and dependency exceptions can contain credentials/paths/raw input.

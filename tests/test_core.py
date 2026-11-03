@@ -91,7 +91,7 @@ class ParsingTest(unittest.TestCase):
         self.assertNotIn('?token=', str(event))
 
     def test_templates_priority(self):
-        policy = PrivacyPolicy([PathRule('/api/.*', '/api/{other}', 'API'), PathRule('/api/risk/.*', '/api/risk/{other}', 'RISK_INTERNAL')])
+        policy = PrivacyPolicy([PathRule('/api/.*', '/api/{other}'), PathRule('/api/risk/.*', '/api/risk/{other}')])
         self.assertEqual(policy.path('/admin/api/risk/test?a=secret')[1], 'RISK_INTERNAL')
         self.assertEqual(policy.path('/unmatched/secret'), ('/unmatched/secret', 'PAGE'))
 
@@ -105,7 +105,7 @@ class ParsingTest(unittest.TestCase):
         policy = PrivacyPolicy(direct_peer_trusted=True)
         self.assertEqual(policy.region('10.0.0.1'), 'INTERNAL')
         self.assertEqual(policy.region('8.8.8.8'), 'UNKNOWN')
-        self.assertEqual(PrivacyPolicy(geo=lambda _: 'CN-31').region('8.8.8.8'), 'CN-31')
+        with self.assertRaises(TypeError): PrivacyPolicy(geo=lambda _: 'CN-31')
 
     def test_status_separation(self):
         event = parse_event(self.event(status=304, upstream_status='502, 504, 200'), PrivacyPolicy())

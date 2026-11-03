@@ -7,9 +7,9 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker
 from .algorithms import HLL, canonical, record_id
 from .paths import valid_stored_path
+from .geo_dimensions import valid_geo_dimensions
 
 ASSETS = Path(__file__).with_name('assets')
-PROTOCOL_VERSION = 'risk-v1-20261028-immutable-r1'
 
 
 def asset(name):
@@ -17,11 +17,12 @@ def asset(name):
 
 
 def verify_assets():
-    manifest = json.loads(asset('risk-v1/sha256.json'))
-    for name, digest in manifest.items():
-        payload = (ASSETS / 'risk-v1' / name).read_bytes()
-        if hashlib.sha256(payload).hexdigest() != digest:
-            raise ValueError('PROTOCOL_ASSET_MISMATCH')
+    for directory in ('risk-v1', 'geoip-v1'):
+        manifest = json.loads(asset(directory + '/sha256.json'))
+        for name, digest in manifest['runtime'].items():
+            payload = (ASSETS / directory / name).read_bytes()
+            if hashlib.sha256(payload).hexdigest() != digest:
+                raise ValueError('PROTOCOL_ASSET_MISMATCH')
 
 
 _SCHEMA = Draft202012Validator(json.loads(asset('risk-v1/record.schema.json')), format_checker=FormatChecker())
@@ -34,7 +35,7 @@ def validate_record(record, encoded=None):
     if type(record['schemaVersion']) is not int or record['schemaVersion'] != 1:
         raise ValueError('INVALID_RECORD')
     dimensions = record['dimensions']
-    if any(not isinstance(value, str) or len(value) > 512 or not value.isascii() for key, value in dimensions.items() if key != 'pathTemplate'):
+    if any(not isinstance(value, str) or len(value) > 512 or not value.isascii() for key, value in dimensions.items() if key not in {'pathTemplate', 'provinceName', 'cityName'}):
         raise ValueError('INVALID_RECORD')
     if 'pathTemplate' in dimensions and not valid_stored_path(dimensions['pathTemplate']):
         raise ValueError('INVALID_RECORD')
@@ -49,6 +50,9 @@ def validate_record(record, encoded=None):
         if valid == 0 and int(record['durationSumMicros']) != 0:
             raise ValueError('INVALID_RECORD')
         if int(record['bytesValidCount']) == 0 and int(record['bytesSum']) != 0:
+            raise ValueError('INVALID_RECORD')
+    if record['kind'] == 'GEO_COUNTER':
+        if not valid_geo_dimensions(dimensions):
             raise ValueError('INVALID_RECORD')
     if record['kind'] == 'SOURCE':
         HLL.decode(record['registersBase64'])

@@ -1,0 +1,14 @@
+# 适用链路：客户端 -> 雷池WAF HTTPS443 -> 本机Nginx HTTP18080 -> Spring Boot。
+# 仅在Nginx实际看到的雷池回源地址为127.0.0.1时使用。
+# 将下面三条指令加入现有 listen 18080 的 server 块，其他配置不变。
+# 需要Nginx构建包含http_realip_module；先在目标机nginx -t，再按部署方式重载。
+
+# 只信任雷池的本机回源，不信任公网客户端自带的XFF。
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# 雷池必须规范维护XFF并包含实际客户端地址；不要原样透传客户端伪造的头。
+# 日志继续使用nginx-risk.conf.example中的 $remote_addr，RealIP生效后它是真实来源。
+# Python对应：DIRECT_PEER_TRUSTED=true，TRUSTED_PROXIES留空，不再二次解析XFF。
+# HTTP18080应只允许雷池回源，避免公网直接绕过WAF。

@@ -1,3 +1,4 @@
+from test_assets import asset
 """New path contract; all tests offline, no configured servers or production inputs."""
 import copy
 import hashlib
@@ -14,7 +15,7 @@ from risk.algorithms import HLL,canonical,checksum,record_id
 from risk.config import Config,SourceConfig
 from risk.parsing import PrivacyPolicy,PathRule,parse_event
 from risk.paths import protect_path,valid_stored_path,SSE_PATHS
-from risk.protocol import asset,validate_record,validate_envelope
+from risk.protocol import validate_record,validate_envelope
 from risk.service import Collector
 from risk.storage import RedisStore
 
@@ -36,7 +37,7 @@ class PathsTest(unittest.TestCase):
             with self.subTest(case=case['name']):
                 data,expected=case['input'],case['expected']
                 key=data['keyUtf8'].encode() if data['keyUtf8'] else None
-                policy=PrivacyPolicy([PathRule(row['pattern'],row['template'],row['requestType']) for row in data['pathRules']])
+                policy=PrivacyPolicy([PathRule(row['pattern'],row['template']) for row in data['pathRules']])
                 result=policy.protected_path(data['uri'],data['businessDate'],key)
                 self.assertEqual(result.template,expected['pathTemplate'])
                 self.assertEqual(result.request_type,expected['requestType'])
@@ -132,23 +133,23 @@ class PathsTest(unittest.TestCase):
             self.assertEqual(parsed['path_template'],uri)
         self.assertEqual(event('/api/fake/stream')['request_type'],'API')
 
-    def test_old_rules_can_group_not_classify_or_leak(self):
-        policy=PrivacyPolicy([PathRule('/api/.*','/token/SyntheticPrivateValue','SSE')])
+    def test_rules_group_without_overriding_classification_or_privacy(self):
+        policy=PrivacyPolicy([PathRule('/api/.*','/token/SyntheticPrivateValue')])
         parsed=event('/api/users/123',policy)
         self.assertEqual(parsed['request_type'],'API')
         self.assertNotIn('SyntheticPrivateValue',str(parsed))
         original=event('/api/token/SyntheticPrivateValue',policy)
         self.assertTrue(original['path_template'].startswith('/api/token/{redacted:'))
-        unicode=PrivacyPolicy([PathRule('/api/.*','/订单/{id}','PAGE')])
+        unicode=PrivacyPolicy([PathRule('/api/.*','/订单/{id}')])
         self.assertEqual(event('/api/users/123',unicode)['path_template'],'/订单/{id}')
         self.assertEqual(event('/admin/api/risk/dashboard',policy)['request_type'],'RISK_INTERNAL')
-        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/token/\\1','API')])
-        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/api/%3Ftoken=secret','API')])
-        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/token/x'*8,'API')])
+        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/token/\\1')])
+        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/api/%3Ftoken=secret')])
+        with self.assertRaises(ValueError):PrivacyPolicy([PathRule('/.*','/token/x'*8)])
 
-    def test_history_and_new_unicode_record_validation(self):
+    def test_current_unicode_record_validation(self):
         template=json.loads(asset('risk-v1-fixtures.json'))['record']
-        for path in ['UNMATCHED','/订单/😀','/用户/{id}']:
+        for path in ['/订单/😀','/用户/{id}']:
             row=copy.deepcopy(template);row['dimensions']['pathTemplate']=path;row['recordId']=record_id(row['dimensions']);validate_record(row)
         for path in ['/api/{redacted:short}','/api/\x00','/api/%20','/'+('😀'*512),'/cafe\u0301','/api/{open','/api/x{redactedSuffix}x']:
             row=copy.deepcopy(template);row['dimensions']['pathTemplate']=path;row['recordId']=record_id(row['dimensions'])
@@ -173,12 +174,13 @@ class PathsTest(unittest.TestCase):
                 self.assertEqual(sum(int(row['requestCount']) for row in counters),len(samples))
                 self.assertEqual(sum(int(row['requestCount']) for row in counters if row['dimensions']['requestType']=='SSE'),9)
                 wire=json.dumps(envelopes)+json.dumps(diagnostics)
-                for secret in ['SyntheticPrivateValue','user@example.invalid','13800138000','12345678-1234-1234-1234-123456789abc','192.0.2.42']:
+                for secret in ['SyntheticPrivateValue','user@example.invalid','13800138000','12345678-1234-1234-1234-123456789abc']:
                     self.assertNotIn(secret,wire)
+                self.assertIn('192.0.2.42',wire)
                 self.assertFalse(any(row['dimensions'].get('reasonCode')=='UNMATCHED_PATH' for env in envelopes for row in env['records']))
             finally:collector.close(flush=False);client.close()
 
-    def test_draft_2020_12_validates_old_and_new_fixtures_and_literal_markers(self):
+    def test_draft_2020_12_validates_fixtures_and_literal_markers(self):
         from jsonschema import Draft202012Validator,FormatChecker
         schema=json.loads(asset('risk-v1/record.schema.json'))
         Draft202012Validator.check_schema(schema)
