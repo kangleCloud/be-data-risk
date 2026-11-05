@@ -1,5 +1,4 @@
 import unittest
-from risk.algorithms import HLL
 from risk.ip_address import canonical_ip
 from risk.parsing import PrivacyPolicy
 
@@ -25,9 +24,3 @@ class CanonicalIpTest(unittest.TestCase):
         policy = PrivacyPolicy(trusted_proxies=['10.0.0.0/8'])
         self.assertIsNone(policy.source('192.0.2.1', '198.51.100.1'))
         self.assertEqual(policy.source('10.0.0.1', '::ffff:192.0.2.1'), '192.0.2.1')
-
-    def test_existing_hll_algorithm_receives_equivalent_normalized_inputs(self):
-        results=[]
-        for value in ['192.0.2.1','::ffff:192.0.2.1']:
-            hll=HLL();hll.add(b'synthetic-test-only-key','2026-10-30',canonical_ip(value));results.append(hll.encode())
-        self.assertEqual(results[0], results[1])

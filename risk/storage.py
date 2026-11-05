@@ -61,9 +61,11 @@ class RedisStore:
             raise StorageError(result)
 
     def publish(self, publication):
+        import json
+        validate_envelope(json.loads(publication.envelope), publication.envelope)
         keys = [PREFIX + 'days', PREFIX + 'pending:' + publication.day,
                 PREFIX + 'batch:' + publication.day + ':' + publication.batch_id,
-                PREFIX + 'checkpoints', PREFIX + 'day-key-ids',
+                PREFIX + 'checkpoints',
                 PREFIX + 'lease:' + publication.source, PREFIX + 'heartbeat']
         args = [publication.batch_id, publication.day, publication.source, publication.token,
                 publication.expected_checkpoint, publication.new_checkpoint, publication.envelope,

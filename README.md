@@ -1,10 +1,10 @@
 # be-data-risk
 
-Python只读采集 Nginx JSON 日志，按当前 schemaVersion=1 将聚合批次原子写入 Redis。Java 负责 Geo 离线查询与 typed 归档；Python不加载MMDB、不直连MySQL。跨语言算法、HLL、24桶、整数微秒、canonical/checksum保持。
+Python 只读采集 Nginx JSON 日志，仅统计 API，按分钟/方法/脱敏路径/可信规范 IP/HTTP 状态合并次数，地域国家、省、市快照与次数在同一行。Java 负责 Geo 定位、持续入库与查询，Python 不加载 MMDB、不直连 MySQL。当前协议见工作区根 `docs/risk-v1-contract.md`，schemaVersion=1。
 
-## 配置和启动
+## 配置与启动
 
-要求 Python >=3.11。Debian 使用 Python3.13 时先安装对应 `python3.13-venv`，再创建虚拟环境。
+要求 Python >=3.11；Debian Python3.13 先安装对应 `python3.13-venv`。
 
 ```sh
 python3.13 -m venv .venv
@@ -13,82 +13,79 @@ cp .env.example .env.prod
 .venv/bin/python -m risk --config .env.prod
 ```
 
-编辑私有配置后再启动；私有文件被Git忽略，不提交真实值。`--config`显式选文件，不读取进程环境覆盖，不执行shell或展开变量。`--once`只处理当前完整行并退出，末段仍提交；`--check-file`仅校验指定合成样本，不产生持久检查点。生产systemd模板见 `deploy/systemd/be-data-risk.service`，安装/启动及日志目录由运维核实，本仓不自动操作服务。
-
-`.env`只支持单行赋值、注释、单/双引号；含空格或`#`应加引号，布尔值用true/false。当前字段见`.env.example`：
+填写实际日志路径、Redis、信任规则和 Geo 后再启动。私有文件被 Git 忽略；不提交真实值。`--config` 显式选择文件，不读取进程环境覆盖，不执行 shell 或展开变量。`.env` 支持单行赋值、注释、单/双引号，含空格或 `#` 需加引号；布尔值用 true/false。`examples/config.example.json` 为同一当前配置模型。未知字段、重复键及冲突配置拒绝。
 
 | 字段 | 用途 |
 |---|---|
-| REDIS_URL/PORT/DB/USERNAME/PASSWORD | 主机名及连接项；密码自动URL编码，必须与Java风控同实例同DB |
-| SOURCE_ID/SOURCE_LOG_PATH | 稳定源别名及实际日志绝对路径 |
-| SOURCES | 多日志源JSON数组，每项alias/path；替代单源SOURCE_LOG_PATH，不能同填 |
-| HMAC_KEY | 至少32 UTF8字节的随机文本，直接写私有文件；同日保持不变，不作hex/base64解码 |
-| GEO_SERVICE_URL/GEO_SERVICE_TOKEN | 固定Java Geo地址及必填专用令牌；URL留空则仅用有效共享缓存，失败UNKNOWN照计 |
-| TRUSTED_PROXIES/DIRECT_PEER_TRUSTED | 可信代理CIDR或已由Nginx规范化的直连来源信任 |
-| MAX_LINE_BYTES/POLL_MILLIS | 默认65536字节、200毫秒 |
-| PATH_RULES | 可选分组JSON数组，仅pattern/template，不能覆盖自动分类或绕过脱敏 |
-
-多源示例（只展示结构，替换实际路径）：
+| REDIS_URL/PORT/DB/USERNAME/PASSWORD | 主机名及连接项；密码自动 URL 编码，与 Java 同实例同 DB |
+| SOURCE_ID/SOURCE_LOG_PATH | 稳定源别名与实际日志绝对路径 |
+| SOURCES | 多源 JSON 数组，每项 alias/path；与单源 SOURCE_LOG_PATH 互斥 |
+| GEO_SERVICE_URL/GEO_SERVICE_TOKEN | 固定 Java Geo endpoint 与专用令牌；URL 留空仅用有效共享缓存，失败 UNKNOWN 照计 |
+| TRUSTED_PROXIES/DIRECT_PEER_TRUSTED | 可信代理 CIDR 或已由 Nginx 规范化的来源信任 |
+| MAX_LINE_BYTES/POLL_MILLIS | 默认单行65536字节、空闲轮询200毫秒 |
+| PATH_RULES | 可选分组 JSON，仅 pattern/template，不能绕过脱敏或改变分类 |
 
 ```dotenv
-SOURCES='[{"alias":"nginx_access","path":"/path/to/access.log"},{"alias":"other_access","path":"/path/to/other.log"}]'
+SOURCES='[{"alias":"first","path":"/path/to/access.log"},{"alias":"second","path":"/path/to/other.log"}]'
 PATH_RULES='[{"pattern":"/api/items/[0-9]+","template":"/api/items/{id}"}]'
 ```
 
-也支持`examples/config.example.json`当前配置模型；`sources`支持多源，`redisUrl`可使用完整redis/rediss/unix URI。未知字段与重复/冲突赋值直接拒绝，不自动回退其他Redis或忽略错误字段。HMAC未填时不生成SOURCE，可信请求计KEY_UNAVAILABLE；同日日密钥冲突明确停止。
+日密钥配置已退出；本机旧私有值只注释保留，不参与运行。路径敏感段使用固定占位。systemd 模板为 `deploy/systemd/be-data-risk.service`；日志目录和服务安装由运维处理。`--once` 排空当前完整行并提交后退出；`--check-file` 仅离线校验合成样本，不写持久检查点。
 
-## Geo 和 Nginx 来源
+## Geo 与来源信任
 
-接口部署于`vita-scheduler`；当前本机端口19004，服务器以实际`vita.http-port`为准。同机直连示例：
+Geo 部署于 vita-scheduler，当前端口19004，服务器以实际 vita.http-port 为准。完整同机 endpoint 示例：
 
 ```dotenv
 GEO_SERVICE_URL=http://127.0.0.1:19004/scheduler/api/internal/risk/geo/resolve-batch
-GEO_SERVICE_TOKEN='在私有文件填专用随机令牌'
+GEO_SERVICE_TOKEN='仅在私有文件填写专用令牌'
 ```
 
-令牌对应Java的`vita.risk.geo.internal-token`，通过X-Risk-Geo-Token发送，服务端空/缺失/错误令牌拒绝，正确令牌不限制来源或转发头。URL只来自运维配置，允许固定公网IP，仍限定HTTP/HTTPS、IP字面量、精确Geo endpoint（部署有`/stock`前缀时加该前缀）、无URL凭据/query/fragment；禁重定向和环境代理，不从日志/响应中选择目的地。
+令牌对应 Java `vita.risk.geo.internal-token`，只经 X-Risk-Geo-Token 发到配置的固定地址。URL 必须 HTTP/HTTPS、固定 IP 字面量、上述完整路径（允许 `/stock` 前缀），无凭据/query/fragment；禁止重定向与环境代理。服务器端校验令牌，不按客户端转发头选择目标。
 
-来源链：客户端→雷池HTTPS443→本机Nginx HTTP18080→Spring Boot。按`examples/nginx-waf-realip.conf.example`核实RealIP指令，继续记录`$remote_addr`。Nginx已规范化真实IP时`DIRECT_PEER_TRUSTED=true`、`TRUSTED_PROXIES=`，Python不再从不可信XFF提取。其他部署需按实际代理链配置，不可全信任客户端转发头。样例不自动修改Nginx。
+客户端→雷池HTTPS443→本机Nginx HTTP18080→Spring Boot 的拓扑，按 `examples/nginx-waf-realip.conf.example` 核实 RealIP，并记录 `$remote_addr`。Nginx 已规范化来源时设置 DIRECT_PEER_TRUSTED=true、TRUSTED_PROXIES 留空；Python 不再从任意客户端 XFF 提取地址。其他拓扑使用明确可信代理 CIDR。IPv4-mapped IPv6 统一为 IPv4，未知来源写 null。
 
-每最多100条完整日志预取后规范去重，短Redis客户端与Java同实例同DB，整体300ms涵盖cache/内部HTTP/best-effort metrics。control/cacheVersion/providerSetVersion按当前schema校验，过期/故障内部补查，失败UNKNOWN不丢请求。非公网INTERNAL、不可信UNKNOWN，不进入定位查询。单一在途worker，慢滴有绝对截止，迟到结果不会改已聚合记录。
+先过滤页面、静态、已知 SSE、风控自身及内部 Geo，再按最多100条预取调用 Geo。非公网 INTERNAL、不可信 UNKNOWN 不进入定位请求。短 Redis 客户端与 Java 同实例同 DB；整体300ms包含缓存、内部 HTTP 与 best-effort 失败指标。保留版本绑定、令牌、单在途 worker、绝对截止与迟到结果隔离。定位失败仍计 API 次数，不清除同自然维度已获得的有效地域快照。
 
-## 统计和持久检查点
+## 批次与检查点
 
-每有效请求各生成一份COUNTER与GEO_COUNTER，可按完全相同维度聚合，禁止相加当总量。GEO只透传Java已验证字段；非CN城市字段为空。HLL只合并同日同keyId寄存器，不加和各单元估算。SSE按日志结束时间计连接持续时长，不推断在线人数/消息量。最终HTTP状态与上游失败尝试分别统计。
+Envelope 只有 schemaVersion、batchId、businessDate、createdAt、records；所有行显式提供 minuteAt、method、pathTemplate、sourceIp、httpStatus、requestCount、regionCode、countryCode、provinceCode、provinceName、cityCode、cityName。未知地域为 null，状态未知为0；2xx/3xx成功，4xx/5xx失败（包括499），0/1xx为 other。requestCount 为正十进制字符串，最大9223372036854775807，溢出拒绝整批。
 
-读取游标可在内存前进，持久检查点只随原子批次发布前进；10秒/500记录/1MiB限制，日切/轮转前提交。结果不确定时重试同ID同正文；半行不推进，租约/检查点冲突停止对应源。正常启动不扫描全库布局；源或Redis启动失败非零退出，运行中的可恢复Redis故障明确记录并重试。
+同批自然维度合并；10秒/500行/1MiB提交，跨日/轮转先提交。所有 JSON、字段、规范 IP、日期、路径、Geo、整数与大小在发布前校验。Lua 在写入前校验键类型、租约、检查点和结构，再原子写 payload/pending/days/checkpoint/heartbeat。只有租约有 TTL，未入库批次及检查点没有 TTL。提交结果不确定时保留原 ID 和正文重试，Java 消费清理后重试不会重建批次。
 
-路径严格UTF8、最多两轮解码、NFC、512码点上限；敏感标签/密码/Token/身份证等定向脱敏，保留普通IP、省市和ISP。不保存完整请求明细、查询参数、请求体、Authorization/Cookie/完整UA或异常原文。所有合法请求都计数，无规则也保留规范路径；不合规路径固定安全值并计质量。
+读取游标可以在内存前进，持久检查点只随成功原子发布前进。过滤或坏日志可发布空 records 以推进检查点；诊断只输出固定原因与数量，不保存原日志。半行不推进；保留轮转、代次与租约冲突保护。启动不做全库盘点；可恢复 Redis 运行故障记录后重试。
 
-## 初始化和从日志头重建
+路径去 query/fragment、严格 UTF8、最多两轮解码、NFC、最多512 Unicode码点，敏感字段及可识别敏感值替换为固定占位，普通 IP/省市/ISP 保留。未命中规则的 API 仍计数。不保存查询参数、请求体、Authorization、Cookie 或完整 UA。
 
-重建脚本只交付，不由本任务执行。先明确数据库和Redis实例，停止风控采集与归档写入；Java重建当前统计、异常、归档和路径字典表，保留服务器目标配置、权限及其他业务。Java开发会话正在实施合一SQL/清理工具，其新回归待完成，本Python工具只清Redis。
+## 切换与精确统计清理
 
-使用现有私有配置，给出**无凭据**且scheme/主机/端口/DB与其一致的显式目标。默认预览：
+本轮只交付脚本，不实际执行。停止 Python 采集与 Java 风控入库写者后，使用现有私有配置，并给出无凭据且 scheme/主机/端口/DB 一致的明确目标。默认预览：
 
 ```sh
 .venv/bin/python tools/rebuild_redis.py --config /path/to/.env.prod --target 'redis://HOST:6379/2'
 ```
 
-确认采集和归档写均已停、目标无误后，才显式执行：
+显式停写确认后执行：
 
 ```sh
 .venv/bin/python tools/rebuild_redis.py --config /path/to/.env.prod --target 'redis://HOST:6379/2' --execute --writers-stopped
 ```
 
-工具只SCAN并分批UNLINK `risk:v1:*`、`geoip:v1:*`，包括检查点；禁止FLUSHDB，不碰其他namespace。`--batch-size`默认100、最大1000，`--max-scan-calls`默认10000，总扫描达上限或Redis故障明确失败，可能已完成的删除不回滚，保持停写后可重新预览和执行。执行后补扫描直到为空；预览scanEntries是扫描条目数，SCAN可能重复，不承诺唯一键精确计数。日志只输出模式/前缀/数量，不输出键名、值、URL或凭据。
+仅处理 `risk:v1:days`、`risk:v1:day-key-ids`、合法日期的 `pending:{date}`、合法日期/UUID 的 `batch:{date}:{UUID}` 和 `risk:v1:query:*`。保留 checkpoints、lease、heartbeat、全部 Geo 缓存/指标、服务器配置及其他业务。不删除整个 namespace，不修改日志或 MMDB；统计清空后从保留的检查点继续，不重读历史。数据库建表/旧表清理由 Java 的脚本单独负责。
 
-再按先Java、后Python启动。清检查点后FileTailer从**当前配置的现有日志文件头**读取，新代次不改日志；不存在的历史文件不补造。重启根据已发布检查点继续，已计请求不重复。原始日志/MMDB不修改。本仓库从未对现有Redis或MySQL执行重建。
+SCAN/UNLINK 有界，默认每批100、最多1000；默认总扫描上限10000、最多100000。执行后补扫描直至目标统计键为空；达到上限或连接失败返回错误，可能已删部分需保持停写后复查。输出只有模式、模式匹配范围与数量，不输出键名、值、目标或凭据。
 
-## 权威资产与验证
+## 离线验证与资产
 
-工作区根`docs/risk-v1/`及两个基础黄金样例是唯一风险权威源，`sha256.json`区分runtime/test；Geo源由Java维护。`scripts/sync_assets.py`只按实际消费需要复制：运行包为schema+三份Lua，测试输入放`tests/resources`并核对SHA。Python不携带无用的Geo字典，不修改Java源。发行wheel不带fixtures、文档或重建工具；源码sdist含测试资源及当前重建脚本，纯fixtures只在tests目录。
+根 `docs/risk-v1/` 为风险 wire 权威，sha256.json 区分 runtime/test。Java 独占接口响应样例 java-service-response.json，不进入 Python 运行包。Geo 权威由 Java 维护；Python 只复制实际消费的 control/result schema，测试只投影定位输入，不携带无关旧统计记录。`scripts/sync_assets.py` 核对源 SHA 后生成副本。
 
 ```sh
 .venv/bin/python scripts/sync_assets.py
 .venv/bin/python -m unittest discover -s tests
-.venv/bin/python -m build --no-isolation --outdir /tmp/be-data-risk-dist
-.venv/bin/python scripts/verify_package.py /tmp/be-data-risk-dist/be_data_risk-0.1.1-py3-none-any.whl
+.venv/bin/python -m compileall -q risk scripts tools tests
+.venv/bin/python scripts/export_fixture.py /tmp/risk-minute-python-envelope.json
+.venv/bin/python -m build --no-isolation --outdir /tmp/be-data-risk-minute-dist
+.venv/bin/python scripts/verify_package.py /tmp/be-data-risk-minute-dist/be_data_risk-0.1.1-py3-none-any.whl
 ```
 
-当前真实验证与未验项集中在`docs/verification.md`。不把fake验证、复用Java合成响应或Python打包通过称为生产/真实MySQL验收。
+wheel 仅带运行代码与 schema/Lua，不带文档、测试、fixture、工具。sdist 带当前测试及默认预览工具。实际验证与未验范围集中在 `docs/verification.md`。

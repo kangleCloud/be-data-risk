@@ -26,10 +26,10 @@ class LuaPreflightTest(unittest.TestCase):
         self.addCleanup(self.client.close)
         self.store = RedisStore(self.client)
         self.store.acquire('source', 'immutable-test-token')
-        self.envelope = json.loads(asset('risk-v1-batches.json'))['batches'][0]
+        self.envelope = json.loads(asset('risk-v1/batches.json'))['batches'][0]
         batch, day = self.envelope['batchId'], self.envelope['businessDate']
         self.keys = [PREFIX+'days', PREFIX+'pending:'+day, PREFIX+'batch:'+day+':'+batch,
-                     PREFIX+'checkpoints', PREFIX+'day-key-ids', PREFIX+'lease:source', PREFIX+'heartbeat']
+                     PREFIX+'checkpoints', PREFIX+'lease:source', PREFIX+'heartbeat']
         self.args = [batch, day, 'source', 'immutable-test-token', '',
                      '{"generation":"safe","offset":"10"}', canonical(self.envelope).decode(), self.envelope['createdAt'], '']
 
@@ -53,25 +53,15 @@ class LuaPreflightTest(unittest.TestCase):
         self.reject_without_writes('INVALID_ARGUMENT')
 
     def test_later_record_invalid_no_first_write(self):
-        self.envelope['records'][-1]['dimensions']['businessDate']='2026-10-25'
+        self.envelope['records'][-1]['minuteAt']='2026-10-25T10:00:00.000+08:00'
         self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
-    def test_record_count_mismatch(self):
-        self.envelope['recordCount']='99'
-        self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
-    def test_records_order_invalid(self):
-        self.envelope['records'].reverse()
-        self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
     def test_duplicate_record(self):
         self.envelope['records'].append(self.envelope['records'][-1])
-        self.envelope['recordCount']=str(len(self.envelope['records']))
         self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
-    def test_source_key_id_mismatch(self):
-        next(row for row in self.envelope['records'] if row['kind']=='SOURCE')['keyId']='other'
-        self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
     def test_extra_envelope_field(self):
         self.envelope['unsafe']='value'
@@ -79,12 +69,10 @@ class LuaPreflightTest(unittest.TestCase):
 
     def test_empty_object_is_not_records_array(self):
         self.envelope['records']={}
-        self.envelope['recordCount']='0'
         self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
     def test_more_than_500_records(self):
-        self.envelope['records']=self.envelope['records']*101
-        self.envelope['recordCount']=str(len(self.envelope['records']))
+        self.envelope['records']=self.envelope['records']*501
         self.changed_envelope(); self.reject_without_writes('INVALID_ARGUMENT')
 
     def test_more_than_one_mib(self):
@@ -116,9 +104,6 @@ class LuaPreflightTest(unittest.TestCase):
         self.args[3]='other-token'
         self.reject_without_writes('LEASE_LOST')
 
-    def test_day_key_conflict(self):
-        self.client.hset(PREFIX+'day-key-ids',self.args[1],'other')
-        self.reject_without_writes('KEY_ID_CONFLICT')
 
     def test_existing_batch_never_overwritten(self):
         self.client.set(self.keys[2],'existing-immutable-payload')
@@ -173,21 +158,7 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(main(),1)
         self.assertEqual(output.getvalue(),'{"code":"COLLECTOR_STOPPED"}\n')
 
-    def test_short_key_fails_before_connection(self):
-        value=json.loads(self.path.read_text());value['hmacKey']='short'
-        self.path.write_text(json.dumps(value))
-        with patch('redis.Redis.from_url') as factory,self.assertRaises(ValueError): run(load_config(self.path),once=True)
-        factory.assert_not_called()
 
-    def test_direct_key_used_by_real_collector_without_key_file(self):
-        import hashlib
-        secret='synthetic-inline-hmac-service-key-32-bytes'
-        value=json.loads(self.path.read_text());value['hmacKey']=secret
-        self.path.write_text(json.dumps(value))
-        with patch('redis.Redis.from_url',return_value=self.client): run(load_config(self.path),once=True)
-        self.assertEqual(self.client.hget(PREFIX+'day-key-ids','2026-10-28'),hashlib.sha256(secret.encode()).hexdigest()[:32])
-        for batch in self.client.smembers(PREFIX+'pending:2026-10-28'):
-            self.assertNotIn(secret,self.client.get(PREFIX+'batch:2026-10-28:'+batch))
 
     def test_sigterm_flushes_buffer_and_restores_handler(self):
         previous=signal.getsignal(signal.SIGTERM)

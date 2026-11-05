@@ -1,17 +1,12 @@
 {
   "runtime": {
-    "record.schema.json": "8dc0f9f438027b2d90dde9123aaf9ed3a8b6d5080546d7e78565ddf6656cd457",
-    "envelope.schema.json": "3a2bcf7edd1b4e5fe5fa962012b10381a89661507e9f690158134bb0c5df5394",
+    "record.schema.json": "4a6d4e1411baeaa2ab859afc0ff8186e804432bf7d3b27733d66eea330fa7819",
+    "envelope.schema.json": "f432b5cd4c9682fdab016c69c2c350f4dc0e6ae21d428371aa46ac7e29fffede",
     "lease.lua": "ffb9329d47f2ddcfcc3cfcbb7b536a95cec7da9ea52d6937962b12653bfccbe5",
-    "publish.lua": "8f67907f5ea8407fadcbf92c75c475ce391fd54c130c4842e1e7ed5c5cb2d4b3",
+    "publish.lua": "dc40686ec2bddd7b0f5be9196530a6521d53c1d63df87de53ed6c6c300838d24",
     "heartbeat.lua": "afe71ac8f968472f049e1453759bc95976bf0815b1d843083a9443d6dbfc2654"
   },
   "test": {
-    "../risk-v1-fixtures.json": "fc4a64f12b56604a962e0c44a9c8d4f3fbc5979afe34cae940b77a6064c7e484",
-    "../risk-v1-batches.json": "f35c0266e5da80e65d79c45d112f999e5714a937c385a97f2b5dc6b7bd8d252b",
-    "path-fixtures.json": "e5a34fac7684ff70815b1c025f5ccf3e9775b074c1249880191baf46ef76d872",
-    "geo-fixtures.json": "1501d96ed86eb29e539a5dfd487a01215e5d6d3306c7955489beeae12b1d05f5",
-    "geo-boundary-fixtures.json": "0488ccc9649b04a97ff9ab0cb6ef2ecc0757244e0c33effc4a8244abe3380a66",
-    "java-service-response.json": "f36de86345f30096805565c19a14a9c4072220fd49c4df2841445ca970d464e8"
+    "batches.json": "046495a87b584f92038ffc19a3d6bfb551998afa725fda6836e09594a814a97d"
   }
 }

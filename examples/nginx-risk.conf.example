@@ -1,5 +1,5 @@
 # 示例待运维核实 Nginx 版本、路径、代理链和轮转；不要原样上线。
-# remote_addr 只在本机只读采集进程内用于可信来源判断/地域/HMAC。
+# remote_addr 只在本机只读采集进程内用于可信来源判断/地域，可信规范IP随统计保存。
 # 不记录 request、args、cookie、authorization、referer、UA、请求体。
 log_format risk_json escape=json '{"time_iso8601":"$time_iso8601",'
   '"remote_addr":"$remote_addr","uri":"$uri",'

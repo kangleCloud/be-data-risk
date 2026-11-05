@@ -14,7 +14,6 @@ class EnvConfigTest(unittest.TestCase):
         cfg=load_config('.env.example')
         self.assertEqual(cfg.sources,())
         self.assertEqual(cfg.redis_url,'redis://localhost:6379/2')
-        self.assertIsNone(cfg.hmac_key)
         self.assertTrue(cfg.privacy.direct_peer_trusted)
 
     def test_multiple_sources_and_current_grouping_fields(self):
@@ -38,8 +37,8 @@ class EnvConfigTest(unittest.TestCase):
 
     def test_values_not_executed_or_interpolated(self):
         value='synthetic-key-${HOST}-$(touch sentinel)-32-bytes'
-        self.path.write_text("HMAC_KEY='"+value+"'\n")
-        self.assertEqual(load_config(self.path).hmac_key,value)
+        self.path.write_text("REDIS_URL=localhost\nREDIS_PASSWORD='"+value+"'\n")
+        self.assertIn('sentinel',load_config(self.path).redis_url)
         self.assertFalse((Path(self.tmp.name)/'sentinel').exists())
 
     def test_flat_password_encoding_and_trusted_proxies(self):
@@ -58,15 +57,3 @@ class EnvConfigTest(unittest.TestCase):
         for uri in ['rediss://fake.invalid:1/3','unix:///tmp/fake.sock?db=3']:
             path.write_text(json.dumps({'redisUrl':uri,'sources':[]}))
             self.assertEqual(load_config(path).redis_url,uri)
-
-    def test_inline_key_preserves_bytes_without_repr(self):
-        secret='synthetic-direct-hmac-key-with-#-and-spaces 123'
-        self.path.write_text("HMAC_KEY='"+secret+"'\n")
-        cfg=load_config(self.path)
-        self.assertEqual(cfg.hmac_key,secret);self.assertNotIn(secret,repr(cfg))
-
-    def test_invalid_key_type_or_length_safe(self):
-        path=Path(self.tmp.name)/'config.json'
-        for value in ['synthetic-short',123,True]:
-            path.write_text(json.dumps({'hmacKey':value}))
-            with self.assertRaisesRegex(ValueError,'INVALID_HMAC_KEY'):load_config(path)

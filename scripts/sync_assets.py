@@ -30,13 +30,20 @@ def sync():
         for section, output in (('runtime', RUNTIME), ('test', TEST)):
             destination = output / directory
             destination.mkdir(parents=True, exist_ok=True)
-            for name, expected in manifest[section].items():
+            for name, expected in list(manifest[section].items()):
                 path = root / name
                 if digest(path) != expected:
                     raise ValueError('SOURCE_ASSET_MISMATCH')
                 target = destination / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, target)
+                if directory == 'geoip-v1' and section == 'test':
+                    # Consume Geo inputs only; risk-record examples in Java authority are unrelated.
+                    value = json.loads(path.read_text())
+                    value = {'control': value['control'], 'cases': [{'name': case['name'], 'result': case['result']} for case in value['cases']]}
+                    target.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+                    manifest[section][name] = digest(target)
+                else:
+                    shutil.copyfile(path, target)
             (destination / 'sha256.json').write_text(json.dumps(manifest, indent=2) + '\n')
             # Only generated consumer directories are pruned, never the authority.
             expected_names = {str((destination / name).resolve()) for name in manifest[section]} | {str((destination / 'sha256.json').resolve())}

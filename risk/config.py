@@ -21,7 +21,6 @@ class Config:
     privacy: PrivacyPolicy
     max_line_bytes: int
     redis_url: str | None = field(default=None, repr=False)
-    hmac_key: str | None = field(default=None, repr=False)
     poll_millis: int = 200
     geo_service_url: str | None = None
     geo_service_token: str | None = field(default=None, repr=False)
@@ -39,7 +38,6 @@ _ENV_FIELDS = {
     'SOURCES': ('sources', True),
     'GEO_SERVICE_URL': ('geoServiceUrl', False),
     'GEO_SERVICE_TOKEN': ('geoServiceToken', False),
-    'HMAC_KEY': ('hmacKey', False),
     'PATH_RULES': ('pathRules', True),
     'DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
     'MAX_LINE_BYTES': ('maxLineBytes', True),
@@ -117,7 +115,7 @@ def load_config(path):
     raw = file.read_bytes()
     value = _env_config(raw) if file.name.startswith('.env') or file.suffix == '.env' else strict_json(raw)
     if set(value) - {'sources', 'pathRules', 'trustedProxies', 'directPeerTrusted', 'maxLineBytes',
-                     'redisUrl', 'hmacKey', 'pollMillis', 'geoServiceUrl', 'geoServiceToken'}:
+                     'redisUrl', 'pollMillis', 'geoServiceUrl', 'geoServiceToken'}:
         raise ValueError('UNKNOWN_CONFIG_FIELD')
     sources = []
     entries = value.get('sources', [])
@@ -161,22 +159,10 @@ def load_config(path):
     redis_url = value.get('redisUrl')
     if redis_url is not None and (not isinstance(redis_url, str) or not redis_url.startswith(('redis://', 'rediss://', 'unix://'))):
         raise ValueError('INVALID_REDIS_CONFIG')
-    hmac_key = value.get('hmacKey')
-    if hmac_key is not None:
-        if not isinstance(hmac_key, str):
-            raise ValueError('INVALID_HMAC_KEY')
-        if not hmac_key:
-            hmac_key = None
-        else:
-            try:
-                if len(hmac_key.encode('utf-8')) < 32:
-                    raise ValueError()
-            except (ValueError, UnicodeError):
-                raise ValueError('INVALID_HMAC_KEY') from None
     if value.get('geoServiceUrl'):
         from .geo import InternalBatchHttp
         InternalBatchHttp(value['geoServiceUrl'], value.get('geoServiceToken'))
     elif value.get('geoServiceToken'):
         raise ValueError('INVALID_GEO_SERVICE_CONFIG')
     return Config(tuple(sources), PrivacyPolicy(rules, proxies, direct), limit, redis_url,
-                  hmac_key, poll, value.get('geoServiceUrl'), value.get('geoServiceToken'))
+                  poll, value.get('geoServiceUrl'), value.get('geoServiceToken'))

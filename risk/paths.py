@@ -1,8 +1,6 @@
 """Executable risk-path-v1 contract; raw paths never escape this module."""
 from dataclasses import dataclass
 from datetime import date
-import hashlib
-import hmac
 import re
 import unicodedata
 from urllib.parse import unquote_to_bytes
@@ -16,7 +14,7 @@ SSE_BASES = ('/market/dashboard/stream', '/stock-monitor/v1/stream', '/etf-monit
 SSE_PATHS = frozenset(prefix + base for prefix in ('', '/openapi/api', '/stock/openapi/api') for base in SSE_BASES)
 STATIC_SUFFIXES = frozenset('css js mjs map png jpg jpeg gif svg ico webp avif woff woff2 ttf eot txt xml pdf mp4 webm'.split())
 PLACEHOLDER = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}')
-MARKER = re.compile(r'\{(?:redacted(?::[a-f0-9]{64})?|path:(?:[a-f0-9]{64}|redacted)|[A-Za-z_][A-Za-z0-9_]*)\}')
+MARKER = re.compile(r'\{(?:redacted|path:redacted|[A-Za-z_][A-Za-z0-9_]*)\}')
 PHONE = re.compile(r'(?<![0-9])(?:\+?86)?1[3-9][0-9]{9}(?![0-9])')
 UUID = re.compile(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}')
 JWT = re.compile(r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}')
@@ -77,7 +75,7 @@ def valid_stored_path(value):
         if marker.startswith('{path:'):
             if match.end() != len(value) or value[match.start()-1:match.start()] != '/':
                 return False
-        elif marker != '{redacted}' and not re.fullmatch(r'\{redacted:[a-f0-9]{64}\}', marker):
+        elif marker != '{redacted}':
             if value[match.start()-1:match.start()] != '/' or (match.end() < len(value) and value[match.end()] != '/'):
                 return False
     rest = MARKER.sub('', value)
@@ -89,17 +87,11 @@ def validate_template(value):
         raise ValueError('INVALID_TEMPLATE')
     try:
         normalized = normalize(value, trusted_template=True)
-        # Only compute expansion width here; no extra runtime key/configuration is introduced.
-        # Fixed digest widths make a non-secret sizing key equivalent to any actual daily key.
-        sized, _, _ = redact(normalized, '1970-01-01', bytes(32))
+        sized, _ = redact(normalized, '1970-01-01')
         if '/{path:' in sized:
             raise ValueError()
     except ValueError:
         raise ValueError('INVALID_TEMPLATE') from None
-
-
-def digest(key, day, purpose, value):
-    return hmac.new(key, ('risk-path-v1\n' + day + '\n' + purpose + '\n' + value).encode('utf-8'), hashlib.sha256).hexdigest()
 
 
 def _random(value):
@@ -140,15 +132,12 @@ def _identity(value, business_date):
     return value[-1].upper() == '10X98765432'[sum(int(digit) * weight for digit, weight in zip(value[:17], weights)) % 11]
 
 
-def redact(path, day, key):
-    output, force, changed, unavailable = [], False, False, False
+def redact(path, day):
+    output, force, changed = [], False, False
     def mask(value):
-        nonlocal changed, unavailable
+        nonlocal changed
         changed = True
-        if not key:
-            unavailable = True
-            return '{redacted}'
-        return '{redacted:' + digest(key, day, 'segment', value) + '}'
+        return '{redacted}'
     for segment in path.split('/'):
         if force and segment:
             output.append(mask(segment))
@@ -167,11 +156,7 @@ def redact(path, day, key):
     result = '/'.join(output)
     if len(result) > MAX_PATH_POINTS:
         changed = True
-        if key:
-            suffix = '/{path:' + digest(key, day, 'path', result) + '}'
-        else:
-            suffix = '/{path:redacted}'
-            unavailable = True
+        suffix = '/{path:redacted}'
         cut = MAX_PATH_POINTS - len(suffix)
         # Never emit half of a redaction marker/trusted placeholder.
         opening = result.rfind('{', 0, cut)
@@ -179,7 +164,7 @@ def redact(path, day, key):
         if opening > closing:
             cut = opening
         result = result[:cut] + suffix
-    return result, changed, unavailable
+    return result, changed
 
 
 def _under(path, prefix):
@@ -187,7 +172,7 @@ def _under(path, prefix):
 
 
 def classify(path):
-    if any(_under(path, prefix) for prefix in ('/admin/api/risk', '/stock/admin/api/risk')):
+    if any(_under(path, prefix) for prefix in ('/admin/api/risk', '/stock/admin/api/risk', '/scheduler/api/internal/risk', '/stock/scheduler/api/internal/risk', '/internal/risk')):
         return 'RISK_INTERNAL'
     if path in SSE_PATHS:
         return 'SSE'
@@ -203,19 +188,18 @@ def classify(path):
     return 'OTHER'
 
 
-def protect_path(value, day, key, rules=()):
+def protect_path(value, day, rules=()):
     try:
         normalized = normalize(value)
     except ValueError:
         return PathResult('/__invalid_path__', 'OTHER', ('UNMATCHED_PATH',))
     kind = classify(normalized)
-    result, changed, unavailable = redact(normalized, day, key)
+    result, changed = redact(normalized, day)
     if not changed and kind not in {'RISK_INTERNAL', 'SSE'}:
         for pattern, template in rules:
             if pattern.fullmatch(normalized):
-                result, _, missing = redact(normalize(template, trusted_template=True), day, key)
-                unavailable = unavailable or missing
+                result, _ = redact(normalize(template, trusted_template=True), day)
                 break
     if not valid_stored_path(result):
         raise ValueError('INVALID_SANITIZED_PATH')
-    return PathResult(result, kind, ('KEY_UNAVAILABLE',) if unavailable else ())
+    return PathResult(result, kind)

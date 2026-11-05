@@ -1,6 +1,8 @@
-"""Preview/reset only risk namespaces on an explicitly confirmed configured target."""
+"""Preview/reset only statistic keys, preserving checkpoints and all Geo data."""
 import argparse
 import json
+import re
+from datetime import date
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit, parse_qs
@@ -8,7 +10,25 @@ from urllib.parse import urlsplit, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from risk.config import load_config
 
-PREFIXES = ('risk:v1:', 'geoip:v1:')
+PATTERNS = ('risk:v1:days', 'risk:v1:day-key-ids', 'risk:v1:pending:*', 'risk:v1:batch:*', 'risk:v1:query:*')
+
+
+def statistic_key(key, pattern):
+    if not isinstance(key, str):
+        return False
+    if pattern in {'risk:v1:days', 'risk:v1:day-key-ids'}:
+        return key == pattern
+    if pattern == 'risk:v1:query:*':
+        return key.startswith('risk:v1:query:') and len(key) > len('risk:v1:query:')
+    match = re.fullmatch(r'risk:v1:pending:(\d{4}-\d{2}-\d{2})' if pattern == 'risk:v1:pending:*' else
+                         r'risk:v1:batch:(\d{4}-\d{2}-\d{2}):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', key)
+    if not match:
+        return False
+    try:
+        date.fromisoformat(match[1])
+        return True
+    except ValueError:
+        return False
 
 
 class RebuildError(ValueError):
@@ -53,17 +73,18 @@ def rebuild(client, *, execute=False, writers_stopped=False, batch_size=100, max
         raise RebuildError('INVALID_REBUILD_LIMIT')
     result = {'mode': 'EXECUTED' if execute else 'DRY_RUN', 'namespaces': {}}
     calls = 0
-    for prefix in PREFIXES:
+    for pattern in PATTERNS:
         cursor = 0
         entries = deleted = pass_entries = 0
         while True:
             if calls >= max_scan_calls:
                 raise RebuildError('REBUILD_SCAN_LIMIT')
-            cursor, keys = client.scan(cursor=cursor, match=prefix + '*', count=batch_size)
+            cursor, keys = client.scan(cursor=cursor, match=pattern, count=batch_size)
             calls += 1
             # Do not trust a malformed SCAN response to expand the deletion scope.
-            if any(not isinstance(key, str) or not key.startswith(prefix) for key in keys):
+            if any(not isinstance(key, str) or not key.startswith(pattern.rstrip('*')) for key in keys):
                 raise RebuildError('INVALID_REBUILD_SCAN')
+            keys = [key for key in keys if statistic_key(key, pattern)]
             entries += len(keys)
             pass_entries += len(keys)
             if execute:
@@ -74,7 +95,7 @@ def rebuild(client, *, execute=False, writers_stopped=False, batch_size=100, max
                     pass_entries = 0 # bounded follow-up sweep verifies no keys remain
                     continue
                 break
-        result['namespaces'][prefix] = {'scanEntries': entries, 'deletedKeys': deleted}
+        result['namespaces'][pattern] = {'scanEntries': entries, 'deletedKeys': deleted}
     return result
 
 
@@ -83,7 +104,7 @@ def main(argv=None):
     parser.add_argument('--config', required=True, help='Existing private .env or JSON config; never a credential argument')
     parser.add_argument('--target', required=True, help='Credential-free redis[s]://HOST:PORT/DB or unix socket URI; must match config')
     parser.add_argument('--execute', action='store_true', help='Explicitly authorize deletion; default is preview')
-    parser.add_argument('--writers-stopped', action='store_true', help='Confirm risk collector and archive writers are stopped')
+    parser.add_argument('--writers-stopped', action='store_true', help='Confirm risk collector and import writers are stopped')
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--max-scan-calls', type=int, default=10000)
     args = parser.parse_args(argv)

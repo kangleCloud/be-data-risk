@@ -2,7 +2,6 @@
 from dataclasses import dataclass, field, replace
 from collections import deque
 from datetime import datetime
-import hashlib
 import json
 import signal
 import sys
@@ -10,8 +9,8 @@ import threading
 import time
 import uuid
 
-from .aggregation import event_records, quality_record, merge
-from .algorithms import HLL, canonical
+from .aggregation import event_records, identity, merge
+from .algorithms import canonical
 from .parsing import Rejected, SHANGHAI, parse_observation
 from .protocol import MAX_BYTES, MAX_RECORDS, make_envelope
 from .storage import RedisStore, StorageError, Publication
@@ -40,11 +39,10 @@ class SourceState:
 
 
 class Collector:
-    def __init__(self, store, config, key=None, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None):
-        self.store, self.config, self.key = store, config, key
+    def __init__(self, store, config, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None):
+        self.store, self.config = store, config
         self.geo = geo
         self.stage_limit = 100
-        self.key_id = hashlib.sha256(key).hexdigest()[:32] if key else 'unavailable'
         self.clock, self.monotonic = clock, monotonic
         self.states = {}
         self.last_event = ''
@@ -93,7 +91,7 @@ class Collector:
         self._renew(source, state)
         if state.publication is None:
             now = self.clock()
-            envelope = make_envelope(state.batch_id, state.day, self.key_id, now, list(state.rows.values()))
+            envelope = make_envelope(state.batch_id, state.day, now, list(state.rows.values()))
             state.publication = Publication(source.alias, state.token, state.checkpoint or '',
                                             state.end_checkpoint, canonical(envelope).decode(),
                                             state.batch_id, state.day, now, state.last_event)
@@ -124,14 +122,14 @@ class Collector:
     def _prospective(self, state, day, rows, now):
         merged = dict(state.rows)
         for row in rows:
-            merged[row['recordId']] = merge(merged.get(row['recordId']), row)
+            key = identity(row)
+            merged[key] = merge(merged.get(key), row)
         if len(merged) > MAX_RECORDS:
             raise ValueError('RECORD_TOO_LARGE')
         # All changed records were validated by merge; avoid re-running every schema per line.
-        # Hash/UUID/time widths are fixed, so placeholders give the EXACT final byte length.
+        # UUID/time widths are fixed; the placeholder preserves final UTF8 byte length.
         envelope = {'schemaVersion': 1, 'batchId': state.batch_id or '00000000-0000-4000-8000-000000000000',
-                    'businessDate': day, 'keyId': self.key_id, 'createdAt': now,
-                    'recordCount': str(len(merged)), 'checksum': '0' * 64, 'records': list(merged.values())}
+                    'businessDate': day, 'createdAt': now, 'records': list(merged.values())}
         if len(canonical(envelope)) > MAX_BYTES:
             raise ValueError('RECORD_TOO_LARGE')
         return merged
@@ -146,22 +144,25 @@ class Collector:
                 if candidate is None:
                     break
                 now, event_at = self.clock(), ''
-                day, event, hll, address = now[:10], None, HLL(), None
-                rows = []
+                day, event, address = now[:10], None, None
+                rows, reasons = [], []
                 if candidate.reason:
                     reason = {'SOURCE_ROTATED': None, 'ROTATED_PARTIAL_LINE': 'INVALID_JSON',
                               'LINE_TOO_LONG': 'INVALID_JSON'}.get(candidate.reason, candidate.reason)
                     if reason:
-                        rows = [quality_record(day, source.alias, reason)]
+                        reasons = [reason]
                 else:
                     try:
-                        event, address = parse_observation(candidate.raw, self.config.privacy, hll, self.key)
+                        event, address = parse_observation(candidate.raw, self.config.privacy)
                         day, event_at = event['business_date'], event['event_at']
-                        addresses.append(address)
+                        if event['request_type'] == 'API':
+                            addresses.append(address)
+                        else:
+                            event = None
                     except Rejected as exc:
-                        rows = [quality_record(day, source.alias, exc.reason)]
+                        reasons = [exc.reason]
                 # Retain sanitized event fields only; raw lines never enter staged memory.
-                frame = (replace(candidate, raw=None), now, day, event_at, event, hll, address, rows)
+                frame = (replace(candidate, raw=None), now, day, event_at, event, address, rows, reasons)
                 frames.append(frame)
                 state.reader.acknowledge(candidate)
                 if candidate.before.generation != candidate.after.generation:
@@ -174,17 +175,18 @@ class Collector:
         budget = min(.300, max(0, 10 - (self.monotonic() - (state.started_at if state.started_at is not None else started))))
         from .geo import fallback_outcome
         try:
-            outcomes = self.geo.resolve_many(addresses, budget=budget) if self.geo is not None else {}
+            outcomes = self.geo.resolve_many(addresses, budget=budget) if self.geo is not None and addresses else {}
         except Exception:
             outcomes = {}
-        for candidate, now, day, event_at, event, hll, address, rows in frames:
+        for candidate, now, day, event_at, event, address, rows, reasons in frames:
             if event is not None:
                 outcome = outcomes.get(address, fallback_outcome(address))
                 event['region_code'] = outcome.region_code
                 event['geo'] = outcome.result or {}
                 event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
-                rows = event_records(event, source.alias, hll, self.key_id)
-            state.staged.append((candidate, now, day, event_at, rows))
+                rows = event_records(event)
+                reasons = event['quality']
+            state.staged.append((candidate, now, day, event_at, rows, reasons))
         if frames and state.started_at is None:
             state.started_at = started
 
@@ -198,7 +200,7 @@ class Collector:
             self._stage(source, state)
         if not state.staged:
             return False
-        candidate, now, day, event_at, rows = state.staged[0]
+        candidate, now, day, event_at, rows, reasons = state.staged[0]
         transition = candidate.before.generation != candidate.after.generation
         if state.day is not None and (state.day != day or transition):
             self._flush(source, state)
@@ -220,11 +222,10 @@ class Collector:
         state.rows = prospective
         state.end_checkpoint = checkpoint_json(candidate.after)
         state.last_event = max(state.last_event, event_at)
-        for row in rows:
-            if row['kind'] == 'QUALITY' and row['dimensions']['reasonCode'] in {'INVALID_JSON', 'INVALID_TIME', 'INVALID_NUMBER', 'SOURCE_TRUNCATED'}:
-                info = state.diagnostics.setdefault(row['dimensions']['reasonCode'],
-                                                     {'generation': candidate.before.generation, 'offset': str(candidate.before.offset), 'count': '0'})
-                info['count'] = str(int(info['count']) + 1)
+        for reason in reasons:
+            info = state.diagnostics.setdefault(reason, {'generation': candidate.before.generation,
+                                                         'offset': str(candidate.before.offset), 'count': '0'})
+            info['count'] = str(int(info['count']) + 1)
         # This advances only the in-memory read cursor, NEVER the durable checkpoint.
         state.staged.popleft()
         if transition or len(state.rows) == MAX_RECORDS or self.monotonic() - state.started_at >= 10:
@@ -284,9 +285,6 @@ def run(config, once=False):
     import redis
     from .protocol import verify_assets
     verify_assets()
-    key = config.hmac_key.encode('utf-8') if config.hmac_key else None
-    if key is not None and len(key) < 32:
-        raise ValueError('HMAC_KEY_TOO_SHORT')
     def diagnostic(value):
         print(json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
     from .geo import UnifiedGeoClient, InternalBatchHttp, make_geo_cache_client
@@ -298,7 +296,7 @@ def run(config, once=False):
     previous_handlers = {}
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.signal(signum, lambda *_: stop.set())
-    collector = Collector(RedisStore(client), config, key, diagnostic=diagnostic, geo=geo)
+    collector = Collector(RedisStore(client), config, diagnostic=diagnostic, geo=geo)
     try:
         while not stop.is_set():
             try:

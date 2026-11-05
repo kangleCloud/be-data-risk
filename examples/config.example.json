@@ -1,7 +1,6 @@
 {
   "sources": [],
   "redisUrl": null,
-  "hmacKey": null,
   "pathRules": [],
   "trustedProxies": [],
   "directPeerTrusted": false,
