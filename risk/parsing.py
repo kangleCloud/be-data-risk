@@ -7,7 +7,7 @@ import json
 import re
 from zoneinfo import ZoneInfo
 from .ip_address import canonical_ip, public_ip
-from .paths import protect_path, validate_template
+from .paths import protect_path, validate_template, normalize
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 REASONS = frozenset({'INVALID_JSON', 'INVALID_TIME', 'INVALID_NUMBER', 'UNMATCHED_PATH', 'UNTRUSTED_IP', 'SOURCE_TRUNCATED'})
@@ -131,7 +131,12 @@ def parse_observation(raw, policy):
         region = policy.region(address)
         if address is None:
             quality.add('UNTRUSTED_IP')
-        event = {'event_at': instant.isoformat(timespec='milliseconds'), 'business_date': instant.date().isoformat(),
+        try:
+            raw_path = normalize(data.get('uri'))
+        except ValueError:
+            raw_path = ''
+        geo_internal = raw_path in {'/scheduler/api/internal/risk/geo/resolve-batch', '/stock/scheduler/api/internal/risk/geo/resolve-batch', '/internal/risk/geo/resolve-batch'}
+        event = {'geo_internal': geo_internal, 'event_at': instant.isoformat(timespec='milliseconds'), 'business_date': instant.date().isoformat(),
                  'path_template': template, 'request_type': kind, 'method': method,
                  'status': status, 'region_code': region, 'source_ip': address}
         event['quality'] = sorted(quality)

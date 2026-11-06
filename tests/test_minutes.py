@@ -96,8 +96,7 @@ class PrivacyParsingTest(unittest.TestCase):
         policy=PrivacyPolicy([PathRule('/api/items/[0-9]+','/api/items/{id}'),PathRule('/index','/api/page')])
         self.assertEqual(policy.path('/api/items/123'),('/api/items/{id}','API'))
         self.assertEqual(policy.path('/index'),('/api/page','PAGE'))
-        for path in ['/market/dashboard/stream','/openapi/api/market/dashboard/stream','/stock/openapi/api/etf-monitor/v1/stream',
-                     '/scheduler/api/internal/risk/geo/resolve-batch','/stock/scheduler/api/internal/risk/geo/resolve-batch','/admin/api/risk/dashboard']:
+        for path in ['/market/dashboard/stream','/openapi/api/market/dashboard/stream','/stock/openapi/api/etf-monitor/v1/stream']:
             self.assertNotEqual(self.parse(path)['request_type'],'API')
 
     def test_timestamp_alias_and_invalid_json_safe(self):
@@ -110,12 +109,25 @@ class PrivacyParsingTest(unittest.TestCase):
 
 class ApiCollectorTest(persistence.CollectorTest):
     def test_filter_before_geo_and_filtered_only_checkpoint(self):
-        lines=[log(uri=uri) for uri in ['/','/assets/main.js','/market/dashboard/stream','/scheduler/api/internal/risk/geo/resolve-batch','/admin/api/risk/dashboard']]
+        lines=[log(uri=uri) for uri in ['/','/assets/main.js','/market/dashboard/stream']]
         self.path.write_bytes(b''.join(lines));self.collector.stage_limit=100
         self.collector.geo=Mock();self.drain();self.collector.flush_all()
         self.collector.geo.resolve_many.assert_not_called()
         self.assertEqual(self.batches()[0]['records'],[])
         self.assertEqual(json.loads(self.store.checkpoint(self.source.alias))['offset'],str(sum(map(len,lines))))
+
+    def test_risk_backend_counted_and_geo_endpoint_does_not_recurse(self):
+        paths=['/stock/admin/api/risk/dashboard','/scheduler/api/internal/risk/geo/resolve-batch',
+               '/stock/scheduler/api/internal/risk/geo/resolve-batch']
+        self.path.write_bytes(b''.join(log(uri=path,remote_addr='8.8.8.8') for path in paths))
+        self.collector.stage_limit=100
+        self.collector.geo=Mock()
+        self.collector.geo.resolve_many.return_value={}
+        self.drain();self.collector.flush_all()
+        self.assertEqual(self.count(),3)
+        self.assertEqual({row['pathTemplate'] for env in self.batches() for row in env['records']},set(paths))
+        self.collector.geo.resolve_many.assert_called_once()
+        self.assertEqual(self.collector.geo.resolve_many.call_args.args[0],['8.8.8.8'])
 
     def test_invalid_or_missing_status_counts_other_without_losing_api(self):
         statuses=[0,100,199,200,399,400,499,599,None,'-',True,600,'invalid']

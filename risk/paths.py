@@ -172,8 +172,6 @@ def _under(path, prefix):
 
 
 def classify(path):
-    if any(_under(path, prefix) for prefix in ('/admin/api/risk', '/stock/admin/api/risk', '/scheduler/api/internal/risk', '/stock/scheduler/api/internal/risk', '/internal/risk')):
-        return 'RISK_INTERNAL'
     if path in SSE_PATHS:
         return 'SSE'
     final = path.rsplit('/', 1)[-1]
@@ -195,7 +193,7 @@ def protect_path(value, day, rules=()):
         return PathResult('/__invalid_path__', 'OTHER', ('UNMATCHED_PATH',))
     kind = classify(normalized)
     result, changed = redact(normalized, day)
-    if not changed and kind not in {'RISK_INTERNAL', 'SSE'}:
+    if not changed and kind != 'SSE':
         for pattern, template in rules:
             if pattern.fullmatch(normalized):
                 result, _ = redact(normalize(template, trusted_template=True), day)

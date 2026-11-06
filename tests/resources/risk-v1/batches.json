@@ -153,6 +153,34 @@
           "regionCode": "UNKNOWN",
           "requestCount": "1",
           "sourceIp": "1.1.1.1"
+        },
+        {
+          "cityCode": null,
+          "cityName": null,
+          "countryCode": null,
+          "httpStatus": 200,
+          "method": "GET",
+          "minuteAt": "2026-11-03T11:00:00.000+08:00",
+          "pathTemplate": "/scheduler/api/internal/risk/geo/resolve-batch",
+          "provinceCode": null,
+          "provinceName": null,
+          "regionCode": "UNKNOWN",
+          "requestCount": "1",
+          "sourceIp": "114.247.50.2"
+        },
+        {
+          "cityCode": "110000",
+          "cityName": "北京市",
+          "countryCode": "CN",
+          "httpStatus": 200,
+          "method": "GET",
+          "minuteAt": "2026-11-03T11:00:00.000+08:00",
+          "pathTemplate": "/admin/api/risk/dashboard",
+          "provinceCode": "CN-11",
+          "provinceName": "北京市",
+          "regionCode": "CN-11",
+          "requestCount": "1",
+          "sourceIp": "114.247.50.2"
         }
       ],
       "schemaVersion": 1
@@ -181,7 +209,7 @@
     }
   ],
   "inputLines": 17,
-  "acceptedRequests": 12,
+  "acceptedRequests": 14,
   "geoLookupCalls": [
     [
       "114.247.50.2",
@@ -190,17 +218,17 @@
     ]
   ],
   "expected": {
-    "requestCount": "12",
-    "successCount": "7",
+    "requestCount": "14",
+    "successCount": "9",
     "failureCount": "3",
     "otherCount": "2",
     "sourceCount": "4",
-    "interfaceCount": "2",
-    "filteredLines": "5"
+    "interfaceCount": "4",
+    "filteredLines": "3"
   },
   "canonicalEnvelopes": [
     "{\"batchId\":\"00000000-0000-0000-0000-000000000003\",\"businessDate\":\"2026-11-02\",\"createdAt\":\"2026-11-03T12:00:00.000+08:00\",\"records\":[{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":499,\"method\":\"GET\",\"minuteAt\":\"2026-11-02T23:59:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"}],\"schemaVersion\":1}",
-    "{\"batchId\":\"00000000-0000-0000-0000-000000000004\",\"businessDate\":\"2026-11-03\",\"createdAt\":\"2026-11-03T12:00:00.000+08:00\",\"records\":[{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"2\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":302,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":499,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":503,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":101,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":0,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"UNKNOWN\",\"requestCount\":\"1\",\"sourceIp\":null},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"INTERNAL\",\"requestCount\":\"1\",\"sourceIp\":\"192.0.2.1\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"2001:4860:4860::8888\"},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"UNKNOWN\",\"requestCount\":\"1\",\"sourceIp\":\"1.1.1.1\"}],\"schemaVersion\":1}",
+    "{\"batchId\":\"00000000-0000-0000-0000-000000000004\",\"businessDate\":\"2026-11-03\",\"createdAt\":\"2026-11-03T12:00:00.000+08:00\",\"records\":[{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"2\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":302,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":499,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":503,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":101,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":0,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"UNKNOWN\",\"requestCount\":\"1\",\"sourceIp\":null},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"INTERNAL\",\"requestCount\":\"1\",\"sourceIp\":\"192.0.2.1\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"2001:4860:4860::8888\"},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/api/行情/查询\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"UNKNOWN\",\"requestCount\":\"1\",\"sourceIp\":\"1.1.1.1\"},{\"cityCode\":null,\"cityName\":null,\"countryCode\":null,\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/scheduler/api/internal/risk/geo/resolve-batch\",\"provinceCode\":null,\"provinceName\":null,\"regionCode\":\"UNKNOWN\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"},{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":200,\"method\":\"GET\",\"minuteAt\":\"2026-11-03T11:00:00.000+08:00\",\"pathTemplate\":\"/admin/api/risk/dashboard\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"}],\"schemaVersion\":1}",
     "{\"batchId\":\"00000000-0000-0000-0000-000000000005\",\"businessDate\":\"2026-11-04\",\"createdAt\":\"2026-11-03T12:00:00.000+08:00\",\"records\":[{\"cityCode\":\"110000\",\"cityName\":\"北京市\",\"countryCode\":\"CN\",\"httpStatus\":204,\"method\":\"GET\",\"minuteAt\":\"2026-11-04T00:00:00.000+08:00\",\"pathTemplate\":\"/api/token/{redacted}\",\"provinceCode\":\"CN-11\",\"provinceName\":\"北京市\",\"regionCode\":\"CN-11\",\"requestCount\":\"1\",\"sourceIp\":\"114.247.50.2\"}],\"schemaVersion\":1}"
   ]
 }

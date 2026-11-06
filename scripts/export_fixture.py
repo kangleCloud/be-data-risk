@@ -67,11 +67,11 @@ def export():
         checkpoint=json.loads(client.hget('risk:v1:checkpoints','fixture'))
         assert int(checkpoint['offset'])==path.stat().st_size
     client.close();cache.close()
-    result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':12,
-            'geoLookupCalls':calls,'expected':{'requestCount':'12','successCount':'7','failureCount':'3','otherCount':'2',
-             'sourceCount':'4','interfaceCount':'2','filteredLines':'5'},
+    result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':14,
+            'geoLookupCalls':calls,'expected':{'requestCount':'14','successCount':'9','failureCount':'3','otherCount':'2',
+             'sourceCount':'4','interfaceCount':'4','filteredLines':'3'},
             'canonicalEnvelopes':[json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')) for v in batches]}
-    assert sum(int(row['requestCount']) for batch in batches for row in batch['records'])==12
+    assert sum(int(row['requestCount']) for batch in batches for row in batch['records'] )==14
     return result
 
 

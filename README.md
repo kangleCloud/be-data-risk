@@ -45,7 +45,7 @@ GEO_SERVICE_TOKEN='仅在私有文件填写专用令牌'
 
 客户端→雷池HTTPS443→本机Nginx HTTP18080→Spring Boot 的拓扑，按 `examples/nginx-waf-realip.conf.example` 核实 RealIP，并记录 `$remote_addr`。Nginx 已规范化来源时设置 DIRECT_PEER_TRUSTED=true、TRUSTED_PROXIES 留空；Python 不再从任意客户端 XFF 提取地址。其他拓扑使用明确可信代理 CIDR。IPv4-mapped IPv6 统一为 IPv4，未知来源写 null。
 
-先过滤页面、静态、已知 SSE、风控自身及内部 Geo，再按最多100条预取调用 Geo。非公网 INTERNAL、不可信 UNKNOWN 不进入定位请求。短 Redis 客户端与 Java 同实例同 DB；整体300ms包含缓存、内部 HTTP 与 best-effort 失败指标。保留版本绑定、令牌、单在途 worker、绝对截止与迟到结果隔离。定位失败仍计 API 次数，不清除同自然维度已获得的有效地域快照。
+先过滤页面、静态和已知 SSE，再按最多100条预取调用 Geo。风控管理和内部 Geo 接口也计数；内部 Geo 接口本身不再发起 Geo 查询，以避免递归调用。非公网 INTERNAL、不可信 UNKNOWN 不进入定位请求。短 Redis 客户端与 Java 同实例同 DB；整体300ms包含缓存、内部 HTTP 与 best-effort 失败指标。保留版本绑定、令牌、单在途 worker、绝对截止与迟到结果隔离。定位失败仍计 API 次数，不清除同自然维度已获得的有效地域快照。
 
 ## 批次与检查点
 

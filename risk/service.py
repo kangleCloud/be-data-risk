@@ -156,7 +156,8 @@ class Collector:
                         event, address = parse_observation(candidate.raw, self.config.privacy)
                         day, event_at = event['business_date'], event['event_at']
                         if event['request_type'] == 'API':
-                            addresses.append(address)
+                            if not event['geo_internal']:
+                                addresses.append(address)
                         else:
                             event = None
                     except Rejected as exc:
@@ -180,7 +181,7 @@ class Collector:
             outcomes = {}
         for candidate, now, day, event_at, event, address, rows, reasons in frames:
             if event is not None:
-                outcome = outcomes.get(address, fallback_outcome(address))
+                outcome = fallback_outcome(address) if event['geo_internal'] else outcomes.get(address, fallback_outcome(address))
                 event['region_code'] = outcome.region_code
                 event['geo'] = outcome.result or {}
                 event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
