@@ -1,4 +1,4 @@
-"""Per-source ten-second memory segments and immutable atomic V1 publication."""
+"""Per-source ten-second memory segments and immutable atomic publication."""
 from dataclasses import dataclass, field, replace
 from collections import deque
 from datetime import datetime
@@ -27,6 +27,7 @@ class SourceState:
     reader: FileTailer
     checkpoint: str | None
     renewed_at: float
+    target_id: str | None = None
     rows: dict = field(default_factory=dict)
     day: str | None = None
     batch_id: str | None = None
@@ -39,8 +40,12 @@ class SourceState:
 
 
 class Collector:
-    def __init__(self, store, config, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None):
+    def __init__(self, store, config, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None,
+                 targets=None):
         self.store, self.config = store, config
+        self.targets = dict(targets or {})
+        if ({source.alias for source in config.sources} - set(self.targets)):
+            raise ValueError('TARGET_CONFIG_REQUIRED')
         self.geo = geo
         self.stage_limit = 100
         self.clock, self.monotonic = clock, monotonic
@@ -81,9 +86,30 @@ class Collector:
         except Exception:
             self.store.lease('RELEASE', source.alias, token)
             raise
-        state = SourceState(token, reader, encoded, self.monotonic())
+        state = SourceState(token, reader, encoded, self.monotonic(), self.targets.get(source.alias))
         self.states[source.alias] = state
         return state
+
+    def prepare_sources(self):
+        """Acquire every source lease and open cursors before collecting."""
+        for source in self.config.sources:
+            self._state(source)
+
+    def renew_leases(self):
+        for source in self.config.sources:
+            state = self.states.get(source.alias)
+            if state is not None:
+                self._renew(source, state, force=True)
+
+    def release_leases(self):
+        for source in self.config.sources:
+            state = self.states.pop(source.alias, None)
+            if state is not None:
+                state.reader.close()
+                try:
+                    self.store.lease('RELEASE', source.alias, state.token)
+                except StorageError:
+                    pass
 
     def _flush(self, source, state):
         if state.end_checkpoint is None:
@@ -91,7 +117,8 @@ class Collector:
         self._renew(source, state)
         if state.publication is None:
             now = self.clock()
-            envelope = make_envelope(state.batch_id, state.day, now, list(state.rows.values()))
+            envelope = make_envelope(state.batch_id, state.day, now, list(state.rows.values()),
+                                     source_id=source.alias)
             state.publication = Publication(source.alias, state.token, state.checkpoint or '',
                                             state.end_checkpoint, canonical(envelope).decode(),
                                             state.batch_id, state.day, now, state.last_event)
@@ -128,8 +155,10 @@ class Collector:
             raise ValueError('RECORD_TOO_LARGE')
         # All changed records were validated by merge; avoid re-running every schema per line.
         # UUID/time widths are fixed; the placeholder preserves final UTF8 byte length.
-        envelope = {'schemaVersion': 1, 'batchId': state.batch_id or '00000000-0000-4000-8000-000000000000',
+        envelope = {'schemaVersion': 2,
+                    'batchId': state.batch_id or '00000000-0000-4000-8000-000000000000',
                     'businessDate': day, 'createdAt': now, 'records': list(merged.values())}
+        envelope['sourceId'] = 's' * 80
         if len(canonical(envelope)) > MAX_BYTES:
             raise ValueError('RECORD_TOO_LARGE')
         return merged
@@ -155,11 +184,8 @@ class Collector:
                     try:
                         event, address = parse_observation(candidate.raw, self.config.privacy)
                         day, event_at = event['business_date'], event['event_at']
-                        if event['request_type'] == 'API':
-                            if not event['geo_internal']:
-                                addresses.append(address)
-                        else:
-                            event = None
+                        if not event['geo_internal']:
+                            addresses.append(address)
                     except Rejected as exc:
                         reasons = [exc.reason]
                 # Retain sanitized event fields only; raw lines never enter staged memory.
@@ -185,7 +211,8 @@ class Collector:
                 event['region_code'] = outcome.region_code
                 event['geo'] = outcome.result or {}
                 event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
-                rows = event_records(event)
+                target_id = state.target_id or self.targets[source.alias]
+                rows = event_records(event, target_id)
                 reasons = event['quality']
             state.staged.append((candidate, now, day, event_at, rows, reasons))
         if frames and state.started_at is None:
@@ -278,44 +305,3 @@ class Collector:
         self.states.clear()
         if failure is not None:
             raise failure
-
-
-def run(config, once=False):
-    if not config.sources or not config.redis_url:
-        raise ValueError('SERVICE_CONFIG_REQUIRED')
-    import redis
-    from .protocol import verify_assets
-    verify_assets()
-    def diagnostic(value):
-        print(json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
-    from .geo import UnifiedGeoClient, InternalBatchHttp, make_geo_cache_client
-    geo_cache = make_geo_cache_client(config.redis_url)
-    transport = InternalBatchHttp(config.geo_service_url, config.geo_service_token) if config.geo_service_url else None
-    geo = UnifiedGeoClient(geo_cache, transport)
-    client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
-    stop = threading.Event()
-    previous_handlers = {}
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        previous_handlers[signum] = signal.signal(signum, lambda *_: stop.set())
-    collector = Collector(RedisStore(client), config, diagnostic=diagnostic, geo=geo)
-    try:
-        while not stop.is_set():
-            try:
-                progress = collector.tick()
-                if once and not progress:
-                    return  # finally flushes the remaining partial segment.
-                if not progress:
-                    stop.wait(collector.wait_seconds())
-            except StorageError as exc:
-                if once or exc.code != 'REDIS_UNAVAILABLE':
-                    raise
-                diagnostic({'code': exc.code})
-                stop.wait(1)
-    finally:
-        try:
-            collector.close()
-        finally:
-            client.close()
-            geo_cache.close()
-            for signum, previous in previous_handlers.items():
-                signal.signal(signum, previous)

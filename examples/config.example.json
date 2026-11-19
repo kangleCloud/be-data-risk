@@ -7,5 +7,7 @@
   "maxLineBytes": 65536,
   "pollMillis": 200,
   "geoServiceUrl": null,
-  "geoServiceToken": null
+  "geoServiceToken": null,
+  "collectorId": null,
+  "sshServers": []
 }

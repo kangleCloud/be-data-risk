@@ -15,6 +15,7 @@ from risk.config import Config, SourceConfig
 from risk.parsing import PrivacyPolicy
 from risk.service import Collector
 from risk.storage import RedisStore
+from risk.ownership import CollectorOwnership
 from risk.geo import UnifiedGeoClient
 from risk.protocol import validate_envelope
 
@@ -37,7 +38,7 @@ def export():
             rows.append(row)
         return {'success':True,'content':{'schemaVersion':1,'cacheVersion':control['cacheVersion'],'redisAvailable':True,'results':rows}}
     cache=fakeredis.FakeRedis(decode_responses=True)
-    cache.hset('geoip:v1:control',mapping=control)
+    cache.hset('geoip:control',mapping=control)
     geo=UnifiedGeoClient(cache,transport,epoch=lambda:datetime.fromisoformat('2026-11-03T12:00:00+08:00').timestamp())
     def log(at='2026-11-03T11:00:59.999+08:00',uri='/api/行情/查询?token=synthetic-secret',address='114.247.50.2',status='200'):
         return {'@timestamp':at,'uri':uri,'remote_addr':address,'http_x_forwarded_for':'9.9.9.9',
@@ -50,28 +51,30 @@ def export():
             log(uri='/scheduler/api/internal/risk/geo/resolve-batch'),log(uri='/admin/api/risk/dashboard'),
             log(at='2026-11-04T00:00:00.000+08:00',uri='/api/token/synthetic-secret-value',status='204')]
     client=fakeredis.FakeRedis(decode_responses=True)
+    owner=CollectorOwnership(client, 'fixture-collector')
+    owner.acquire()
     with tempfile.TemporaryDirectory() as folder:
         path=Path(folder)/'synthetic.log'
         path.write_bytes(b''.join(json.dumps(row,ensure_ascii=False).encode()+b'\n' for row in inputs))
         config=Config((SourceConfig('fixture',path),),PrivacyPolicy(direct_peer_trusted=True),65536)
         ids=iter(uuid.UUID(int=i) for i in range(1,50))
         with patch('risk.service.uuid.uuid4',side_effect=lambda:next(ids)):
-            collector=Collector(RedisStore(client),config,clock=lambda:NOW,geo=geo)
+            collector=Collector(RedisStore(client, owner),config,clock=lambda:NOW,geo=geo,targets={'fixture':'1'})
             try:
                 while collector.tick():pass
                 collector.close()
             finally:collector.close(flush=False)
         batches=[]
-        for key in sorted(client.scan_iter('risk:v1:batch:*')):
+        for key in sorted(client.scan_iter('risk:batch:*')):
             value=json.loads(client.get(key));validate_envelope(value);batches.append(value)
-        checkpoint=json.loads(client.hget('risk:v1:checkpoints','fixture'))
+        checkpoint=json.loads(client.hget('risk:checkpoints','fixture'))
         assert int(checkpoint['offset'])==path.stat().st_size
     client.close();cache.close()
-    result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':14,
-            'geoLookupCalls':calls,'expected':{'requestCount':'14','successCount':'9','failureCount':'3','otherCount':'2',
-             'sourceCount':'4','interfaceCount':'4','filteredLines':'3'},
+    result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':17,
+            'geoLookupCalls':calls,'expected':{'requestCount':'17','successCount':'12','failureCount':'3','otherCount':'2',
+             'sourceCount':'4','interfaceCount':'7','filteredLines':'0'},
             'canonicalEnvelopes':[json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')) for v in batches]}
-    assert sum(int(row['requestCount']) for batch in batches for row in batch['records'] )==14
+    assert sum(int(row['requestCount']) for batch in batches for row in batch['records'] )==17
     return result
 
 

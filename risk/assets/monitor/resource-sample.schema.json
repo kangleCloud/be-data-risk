@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resource sample; numeric values are decimal strings or null",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "targetId",
+    "collectorId",
+    "configVersion",
+    "sampledAt",
+    "writtenAtMillis",
+    "status",
+    "cpuPercent",
+    "memoryUsedBytes",
+    "memoryTotalBytes",
+    "diskUsedBytes",
+    "diskTotalBytes",
+    "networkReceiveBytesPerSecond",
+    "networkTransmitBytesPerSecond",
+    "load1",
+    "uptimeSeconds",
+    "unavailableReasons"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "targetId": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "collectorId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,80}$"
+    },
+    "configVersion": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+    },
+    "sampledAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "SUCCEEDED",
+        "PARTIAL",
+        "FAILED"
+      ]
+    },
+    "cpuPercent": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,6})(?:\\.[0-9]{1,6})?$"
+        }
+      ]
+    },
+    "memoryUsedBytes": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "memoryTotalBytes": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "diskUsedBytes": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "diskTotalBytes": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "networkReceiveBytesPerSecond": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "networkTransmitBytesPerSecond": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "load1": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,6})(?:\\.[0-9]{1,6})?$"
+        }
+      ]
+    },
+    "uptimeSeconds": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+        }
+      ]
+    },
+    "unavailableReasons": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "memory": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "disk": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "networkRate": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "load": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        },
+        "uptime": {
+          "enum": [
+            "NO_SAMPLE",
+            "SAMPLE_TIMEOUT",
+            "SAMPLE_FAILED",
+            "FIRST_SAMPLE",
+            "COUNTER_RESET",
+            "HOST_RESTART",
+            "NOT_SUPPORTED",
+            "READ_FAILED",
+            "UNKNOWN"
+          ]
+        }
+      }
+    },
+    "writtenAtMillis": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,19})$"
+    }
+  }
+}

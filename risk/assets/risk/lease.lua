@@ -1,5 +1,6 @@
--- KEYS[1]=risk:v1:lease:{sourceId}; ARGV=operation(RENEW/RELEASE),sourceId,token,ttlMillis
-if #KEYS~=1 or #ARGV~=4 or not string.match(ARGV[2],'^[a-zA-Z0-9_%-]+$') or #ARGV[2]>80 or KEYS[1]~='risk:v1:lease:'..ARGV[2] then return 'INVALID_ARGUMENT' end
+-- KEYS[1]=risk:lease:{sourceId}; ARGV=operation(RENEW/RELEASE),sourceId,token,ttlMillis
+local function hex(value) return (string.gsub(value, '.', function(char) return string.format('%02X', string.byte(char)) end)) end
+if #KEYS~=1 or #ARGV~=4 or not string.match(ARGV[2],'^[a-zA-Z0-9_%-]+$') or #ARGV[2]>80 or KEYS[1]~='risk:lease:'..hex(ARGV[2]) then return 'INVALID_ARGUMENT' end
 local actual=redis.call('TYPE',KEYS[1]).ok
 if actual~='none' and actual~='string' then return 'WRONG_TYPE' end
 if ARGV[1]~='RENEW' and ARGV[1]~='RELEASE' then return 'INVALID_ARGUMENT' end

@@ -15,18 +15,15 @@ def digest(path):
 
 
 def sync():
-    for directory in ('risk-v1', 'geoip-v1'):
+    for directory in ('geoip-v1',):
         root = SOURCE / directory
         source = json.loads((root / 'sha256.json').read_text())
         if set(source) != {'runtime', 'test'}:
             raise ValueError('INVALID_SOURCE_MANIFEST')
-        if directory == 'risk-v1':
-            manifest = source
-        else:
-            # Geo authority is Java-owned. Select only this consumer's actual needs.
-            hashes = source['runtime'] | source['test']
-            manifest = {'runtime': {name: hashes[name] for name in ('control.schema.json', 'result.schema.json')},
-                        'test': {'fixtures.json': hashes['fixtures.json']}}
+        # Geo authority is Java-owned. Select only this consumer's actual needs.
+        hashes = source['runtime'] | source['test']
+        manifest = {'runtime': {name: hashes[name] for name in ('control.schema.json', 'result.schema.json')},
+                    'test': {'fixtures.json': hashes['fixtures.json']}}
         for section, output in (('runtime', RUNTIME), ('test', TEST)):
             destination = output / directory
             destination.mkdir(parents=True, exist_ok=True)

@@ -1,12 +1,25 @@
--- Immutable single-source segment publish. No commands that may type-error after validation.
-if #KEYS~=6 or #ARGV~=9 then return 'INVALID_ARGUMENT' end
+-- Immutable single-source full-HTTP segment publication.
+local function hex(value) return (string.gsub(value, '.', function(char) return string.format('%02X', string.byte(char)) end)) end
+local function collector_guard(lease, heartbeat, id, token, epoch)
+ if type(id)~='string' or #id<1 or #id>80 or not string.match(id,'^[a-zA-Z0-9_%-]+$') or type(token)~='string' or not string.match(token,'^[a-zA-Z0-9%-]+$') or type(epoch)~='string' or not string.match(epoch,'^[1-9]%d*$') then return 'INVALID_ARGUMENT' end
+ local segment=hex(id)
+ if lease~='risk:monitor:lease:'..segment or heartbeat~='risk:heartbeat' then return 'INVALID_ARGUMENT' end
+ local a=redis.call('TYPE',lease).ok
+ local b=redis.call('TYPE',heartbeat).ok
+ if (a~='none' and a~='string') or (b~='none' and b~='hash') then return 'WRONG_TYPE' end
+ if redis.call('GET',lease)~=token..':'..epoch or redis.call('HGET',heartbeat,'monitorEpoch:'..segment)~=epoch then return 'COLLECTOR_LEASE_LOST' end
+ return nil
+end
+if #KEYS~=8 or #ARGV~=12 then return 'INVALID_ARGUMENT' end
+local guard=collector_guard(KEYS[7],KEYS[8],ARGV[10],ARGV[11],ARGV[12])
+if guard then return guard end
 local function typ(key, expected)
  local actual=redis.call('TYPE',key).ok
  return actual=='none' or actual==expected
 end
 local types={'set','set','string','hash','string','hash'}
-for idx,key in ipairs(KEYS) do if not typ(key,types[idx]) then return 'WRONG_TYPE' end end
-local batch,day,source,token,old,new,payload,now,event=unpack(ARGV)
+for idx,key in ipairs({unpack(KEYS,1,6)}) do if not typ(key,types[idx]) then return 'WRONG_TYPE' end end
+local batch,day,source,token,old,new,payload,now,event=unpack(ARGV,1,9)
 local function date(value)
  return type(value)=='string' and string.match(value,'^%d%d%d%d%-%d%d%-%d%d$')
 end
@@ -29,8 +42,8 @@ local function checkpoint(value)
  return cp
 end
 if not uuid(batch) or not date(day) or not ident(source) or #token<1 or #token>128 or not instant(now) or (event~='' and not instant(event)) or #payload>1048576 then return 'INVALID_ARGUMENT' end
-local expected={'risk:v1:days','risk:v1:pending:'..day,'risk:v1:batch:'..day..':'..batch,'risk:v1:checkpoints','risk:v1:lease:'..source,'risk:v1:heartbeat'}
-for idx,key in ipairs(KEYS) do if key~=expected[idx] then return 'INVALID_ARGUMENT' end end
+local expected={'risk:days','risk:pending:'..day,'risk:batch:'..day..':'..batch,'risk:checkpoints','risk:lease:'..hex(source),'risk:heartbeat'}
+for idx,key in ipairs({unpack(KEYS,1,6)}) do if key~=expected[idx] then return 'INVALID_ARGUMENT' end end
 local cp=checkpoint(new)
 local prior=nil
 if old~='' then prior=checkpoint(old) end
@@ -39,22 +52,24 @@ if prior and prior.generation==cp.generation and (#cp.offset<#prior.offset or (#
 if not string.find(payload,'"records":[',1,true) then return 'INVALID_ARGUMENT' end
 local ok,envelope=pcall(cjson.decode,payload)
 if not ok or type(envelope)~='table' then return 'INVALID_ARGUMENT' end
-local allowed={schemaVersion=true,batchId=true,businessDate=true,createdAt=true,records=true}
+local allowed={schemaVersion=true,batchId=true,businessDate=true,createdAt=true,sourceId=true,records=true}
 local fields=0
 for key,_ in pairs(envelope) do if not allowed[key] then return 'INVALID_ARGUMENT' end fields=fields+1 end
-if fields~=5 or envelope.schemaVersion~=1 or envelope.batchId~=batch or envelope.businessDate~=day or envelope.createdAt~=now or type(envelope.records)~='table' or #envelope.records>500 then return 'INVALID_ARGUMENT' end
-local rowFields={minuteAt=true,method=true,pathTemplate=true,sourceIp=true,httpStatus=true,requestCount=true,regionCode=true,countryCode=true,provinceCode=true,provinceName=true,cityCode=true,cityName=true}
+if fields~=6 or envelope.schemaVersion~=2 or envelope.batchId~=batch or envelope.businessDate~=day or envelope.createdAt~=now or envelope.sourceId~=source or type(envelope.records)~='table' or #envelope.records>500 then return 'INVALID_ARGUMENT' end
+local rowFields={minuteAt=true,method=true,pathTemplate=true,sourceIp=true,httpStatus=true,requestCount=true,regionCode=true,countryCode=true,provinceCode=true,provinceName=true,cityCode=true,cityName=true,targetId=true,requestType=true}
 local seen={}
 for _,row in ipairs(envelope.records) do
  if type(row)~='table' then return 'INVALID_ARGUMENT' end
  local count=0
  for key,_ in pairs(row) do if not rowFields[key] then return 'INVALID_ARGUMENT' end count=count+1 end
- if count~=12 or not instant(row.minuteAt) or string.sub(row.minuteAt,1,10)~=day or string.sub(row.minuteAt,18,23)~='00.000' or type(row.method)~='string' or #row.method<2 or #row.method>12 or not string.match(row.method,'^[A-Z]+$') or type(row.pathTemplate)~='string' or string.sub(row.pathTemplate,1,1)~='/' or type(row.httpStatus)~='number' or row.httpStatus%1~=0 or (row.httpStatus~=0 and (row.httpStatus<100 or row.httpStatus>599)) then return 'INVALID_ARGUMENT' end
+ if count~=14 or not instant(row.minuteAt) or string.sub(row.minuteAt,1,10)~=day or string.sub(row.minuteAt,18,23)~='00.000' or type(row.method)~='string' or #row.method<2 or #row.method>12 or not string.match(row.method,'^[A-Z]+$') or type(row.pathTemplate)~='string' or string.sub(row.pathTemplate,1,1)~='/' or type(row.httpStatus)~='number' or row.httpStatus%1~=0 or (row.httpStatus~=0 and (row.httpStatus<100 or row.httpStatus>599)) then return 'INVALID_ARGUMENT' end
  local n=row.requestCount
  if type(n)~='string' or not string.match(n,'^[1-9]%d*$') or #n>19 or (#n==19 and n>'9223372036854775807') then return 'INVALID_ARGUMENT' end
  for _,name in ipairs({'sourceIp','countryCode','provinceCode','provinceName','cityCode','cityName'}) do if row[name]~=cjson.null and (type(row[name])~='string' or #row[name]==0) then return 'INVALID_ARGUMENT' end end
  if type(row.regionCode)~='string' then return 'INVALID_ARGUMENT' end
- local identity=cjson.encode({row.minuteAt,row.method,row.pathTemplate,row.sourceIp,row.httpStatus})
+ if type(row.targetId)~='string' or not string.match(row.targetId,'^[1-9]%d*$') or #row.targetId>19 or (#row.targetId==19 and row.targetId>'9223372036854775807') then return 'INVALID_ARGUMENT' end
+ if row.requestType~='API' and row.requestType~='PAGE' and row.requestType~='STATIC' and row.requestType~='OTHER' then return 'INVALID_ARGUMENT' end
+ local identity=cjson.encode({row.targetId,row.requestType,row.minuteAt,row.method,row.pathTemplate,row.sourceIp,row.httpStatus})
  if seen[identity] then return 'INVALID_ARGUMENT' end
  seen[identity]=true
 end
