@@ -17,4 +17,4 @@ packages = ["risk"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-risk = ["assets/*", "assets/risk-v1/*", "assets/geoip-v1/*"]
+risk = ["assets/*", "assets/risk/*", "assets/monitor/*", "assets/geoip-v1/*"]

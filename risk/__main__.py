@@ -33,7 +33,7 @@ def check_file(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Risk V1 read-only Nginx collector')
+    parser = argparse.ArgumentParser(description='Risk read-only Nginx and resource collector')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--check-file', help='Validate a local sample; no persistent checkpoint')
     group.add_argument('--config', help='Explicit local configuration file; no implicit server defaults')
@@ -43,11 +43,14 @@ def main():
         if args.check_file:
             check_file(args.check_file)
         else:
-            from .service import run
-            run(load_config(args.config), args.once)
+            config = load_config(args.config)
+            from .monitor import run_monitor
+            run_monitor(config, args.once)
     except Exception as exc:
+        from .monitor import MonitorRuntimeError
+        from .ssh import SshBindingError
         from .storage import StorageError
-        if isinstance(exc, (StorageError, SourceError)):
+        if isinstance(exc, (StorageError, SourceError, MonitorRuntimeError, SshBindingError)):
             print(json.dumps({'code': exc.code}), file=sys.stderr)
             return 1
         # Configuration, OS and dependency exceptions can contain credentials/paths/raw input.

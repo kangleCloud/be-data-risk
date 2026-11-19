@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Immutable API minute batch; max 1048576 UTF8 bytes",
+  "title": "Immutable full-HTTP minute batch; max 1048576 UTF8 bytes",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -8,12 +8,13 @@
     "batchId",
     "businessDate",
     "createdAt",
+    "sourceId",
     "records"
   ],
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "const": 1
+      "const": 2
     },
     "batchId": {
       "type": "string",
@@ -27,6 +28,10 @@
       "type": "string",
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
+    },
+    "sourceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,80}$"
     },
     "records": {
       "type": "array",

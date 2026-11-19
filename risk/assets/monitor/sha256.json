@@ -1,0 +1,8 @@
+{
+  "runtime": {
+    "collector-lease.lua": "39d10356c85d2109a3c9f19812591dc90dcb51c4952fd91f58e8e0d036661289",
+    "collector-status.lua": "6ce83a88b9edc112f89fbb7036a160a45203165cee2cfa3e7db3ae211a762713",
+    "resource-publish.lua": "83538c31f5e2f55f27fa97322e906ad8ebc497f03677e8cbb5e3c483c98f2d95",
+    "resource-sample.schema.json": "7f98639a171025d729f5ecd3fb06e5f1314f0ff10b5746426ff902e269a7f145"
+  }
+}

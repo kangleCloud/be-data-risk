@@ -24,6 +24,8 @@ class Config:
     poll_millis: int = 200
     geo_service_url: str | None = None
     geo_service_token: str | None = field(default=None, repr=False)
+    collector_id: str | None = None
+    ssh_servers: tuple = field(default=(), repr=False)
 
 
 def _local_path(value):
@@ -38,6 +40,8 @@ _ENV_FIELDS = {
     'SOURCES': ('sources', True),
     'GEO_SERVICE_URL': ('geoServiceUrl', False),
     'GEO_SERVICE_TOKEN': ('geoServiceToken', False),
+    'COLLECTOR_ID': ('collectorId', False),
+    'SSH_SERVERS': ('sshServers', True),
     'PATH_RULES': ('pathRules', True),
     'DIRECT_PEER_TRUSTED': ('directPeerTrusted', True),
     'MAX_LINE_BYTES': ('maxLineBytes', True),
@@ -81,6 +85,9 @@ def _env_config(raw):
             if not separator or name not in (_ENV_FIELDS.keys() | _FLAT_FIELDS) or name in seen:
                 raise ValueError()
             seen.add(name)
+            if name == 'SSH_SERVERS' and literal.lstrip().startswith('['):
+                result['sshServers'] = json.loads(literal.strip())
+                continue
             parts = shlex.split(literal.strip(), comments=True, posix=True)
             if len(parts) > 1:
                 raise ValueError()
@@ -115,7 +122,8 @@ def load_config(path):
     raw = file.read_bytes()
     value = _env_config(raw) if file.name.startswith('.env') or file.suffix == '.env' else strict_json(raw)
     if set(value) - {'sources', 'pathRules', 'trustedProxies', 'directPeerTrusted', 'maxLineBytes',
-                     'redisUrl', 'pollMillis', 'geoServiceUrl', 'geoServiceToken'}:
+                     'redisUrl', 'pollMillis', 'geoServiceUrl', 'geoServiceToken',
+                     'collectorId', 'sshServers'}:
         raise ValueError('UNKNOWN_CONFIG_FIELD')
     sources = []
     entries = value.get('sources', [])
@@ -159,10 +167,19 @@ def load_config(path):
     redis_url = value.get('redisUrl')
     if redis_url is not None and (not isinstance(redis_url, str) or not redis_url.startswith(('redis://', 'rediss://', 'unix://'))):
         raise ValueError('INVALID_REDIS_CONFIG')
+    collector_id = value.get('collectorId')
+    if collector_id is not None and (not isinstance(collector_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', collector_id)):
+        raise ValueError('INVALID_COLLECTOR_ID')
+    from .ssh import SshAllowlist, SshBindingError
+    try:
+        ssh_servers = SshAllowlist.from_config(value.get('sshServers', [])).bindings
+    except SshBindingError:
+        raise ValueError('INVALID_SSH_SERVERS') from None
     if value.get('geoServiceUrl'):
         from .geo import InternalBatchHttp
         InternalBatchHttp(value['geoServiceUrl'], value.get('geoServiceToken'))
     elif value.get('geoServiceToken'):
         raise ValueError('INVALID_GEO_SERVICE_CONFIG')
     return Config(tuple(sources), PrivacyPolicy(rules, proxies, direct), limit, redis_url,
-                  poll, value.get('geoServiceUrl'), value.get('geoServiceToken'))
+                  poll, value.get('geoServiceUrl'), value.get('geoServiceToken'),
+                  collector_id, ssh_servers)

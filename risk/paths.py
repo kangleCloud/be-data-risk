@@ -173,7 +173,8 @@ def _under(path, prefix):
 
 def classify(path):
     if path in SSE_PATHS:
-        return 'SSE'
+        # Count completed SSE requests in HTTP totals without connection semantics.
+        return 'OTHER'
     final = path.rsplit('/', 1)[-1]
     suffix = final.rsplit('.', 1)[-1].lower() if '.' in final else ''
     if any(_under(path, prefix) for prefix in ('/assets', '/static')) or suffix in STATIC_SUFFIXES:
@@ -193,7 +194,7 @@ def protect_path(value, day, rules=()):
         return PathResult('/__invalid_path__', 'OTHER', ('UNMATCHED_PATH',))
     kind = classify(normalized)
     result, changed = redact(normalized, day)
-    if not changed and kind != 'SSE':
+    if not changed and normalized not in SSE_PATHS:
         for pattern, template in rules:
             if pattern.fullmatch(normalized):
                 result, _ = redact(normalize(template, trusted_template=True), day)

@@ -14,6 +14,7 @@ from .ip_address import canonical_ip, public_ip
 from .parsing import strict_json
 from .protocol import asset
 from .geo_dimensions import valid_geo_dimensions
+from .redis_keys import key_segment
 
 _RESULT = Draft202012Validator(json.loads(asset('geoip-v1/result.schema.json')))
 _CONTROL = Draft202012Validator(json.loads(asset('geoip-v1/control.schema.json')))
@@ -48,7 +49,11 @@ def _time(value):
 
 
 def _control(value):
-    return _CONTROL.is_valid(value) and all(isinstance(value.get(k), str) and value[k] for k in ('cacheVersion','providerSetVersion'))
+    try:
+        key_segment(value.get('cacheVersion'))
+        return _CONTROL.is_valid(value) and isinstance(value.get('providerSetVersion'), str) and bool(value['providerSetVersion'])
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def _valid_result(result, address, control, now):
@@ -190,10 +195,10 @@ class UnifiedGeoClient:
         results={a:fallback_outcome(a) for a in all_addresses if a not in addresses}
         miss=list(addresses);stale=set()
         try:
-            control=self.cache.hgetall('geoip:v1:control') if addresses else {}
+            control=self.cache.hgetall('geoip:control') if addresses else {}
             if _control(control) and self.monotonic()<deadline:
-                payloads=self.cache.mget(['geoip:v1:result:'+control['cacheVersion']+':'+value for value in addresses])
-                if self.cache.hgetall('geoip:v1:control')!=control:
+                payloads=self.cache.mget(['geoip:result:'+key_segment(control['cacheVersion'])+':'+value for value in addresses])
+                if self.cache.hgetall('geoip:control')!=control:
                     raise ValueError('GEO_CONTROL_CHANGED')
                 miss=[]
                 for address,payload in zip(addresses,payloads):
@@ -212,6 +217,7 @@ class UnifiedGeoClient:
                 content=reply['content']
                 if reply.get('success') is not True or (type(content.get('schemaVersion')) is not int or content['schemaVersion']!=1) or not isinstance(content.get('redisAvailable'),bool):raise ValueError()
                 if set(content)!={'schemaVersion','cacheVersion','redisAvailable','results'} or not isinstance(content.get('cacheVersion'),str) or not content['cacheVersion']:raise ValueError()
+                key_segment(content['cacheVersion'])
                 rows=content['results']
                 if not isinstance(rows,list) or len(rows)!=len(miss):raise ValueError()
                 found={}
@@ -244,9 +250,9 @@ class UnifiedGeoClient:
                     for reason,field in [('GEO_SERVICE_UNAVAILABLE','serviceUnavailable'),('GEO_CODE_CONFLICT','conflicts'),('GEO_LOCAL_DEGRADED','localDegraded'),('GEO_VERSION_STALE','versionStale')]:
                         if reason in outcome.quality:metrics['quality_'+field]+=1
                 pipe=self.cache.pipeline(transaction=False)
-                for key,value in metrics.items():pipe.hincrby('geoip:v1:metrics:python',key,value)
+                for key,value in metrics.items():pipe.hincrby('geoip:metrics:python',key,value)
                 from .parsing import SHANGHAI
-                pipe.hset('geoip:v1:metrics:python','reportedAt',datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
+                pipe.hset('geoip:metrics:python','reportedAt',datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
                 pipe.execute()
             except Exception:
                 pass

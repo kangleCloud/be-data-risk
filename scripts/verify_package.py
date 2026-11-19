@@ -8,6 +8,7 @@ import zipfile
 wheel=Path(sys.argv[1]).resolve()
 repo=Path(__file__).resolve().parents[1]
 resources=(repo/'tests/resources').resolve()
+examples=(repo/'examples/risk-monitor.samples.json').resolve()
 with tempfile.TemporaryDirectory() as folder:
     root=Path(folder)
     with zipfile.ZipFile(wheel) as archive:
@@ -28,17 +29,17 @@ from risk.protocol import verify_assets,validate_envelope
 from risk.parsing import PrivacyPolicy
 verify_assets()
 resources=Path(sys.argv[3])
-for directory in ('risk-v1','geoip-v1'):
+for directory in ('geoip-v1',):
     manifest=json.loads((resources/directory/'sha256.json').read_text())
     for name,expected in manifest['test'].items():
         assert hashlib.sha256((resources/directory/name).read_bytes()).hexdigest()==expected
-fixture=json.loads((resources/'risk-v1/batches.json').read_text())
-for envelope,encoded in zip(fixture['batches'],fixture['canonicalEnvelopes']):validate_envelope(envelope,encoded)
+fixture=json.loads(Path(sys.argv[4]).read_text())
+validate_envelope(fixture['accessBatch'])
 assert PrivacyPolicy().path('/api/token/private')==('/api/token/{redacted}','API')
 from risk.__main__ import main
 sys.argv=['risk','--check-file',sys.argv[2]]
 assert main()==0
 '''
-    result=subprocess.run([sys.executable,'-I','-c',code,str(root),str(sample),str(resources)],cwd=root,text=True,capture_output=True,check=True)
+    result=subprocess.run([sys.executable,'-I','-c',code,str(root),str(sample),str(resources),str(examples)],cwd=root,text=True,capture_output=True,check=True)
     assert result.stdout.strip()
     print('Runtime-only wheel; isolated schemas, external current batches and entry point: PASS')

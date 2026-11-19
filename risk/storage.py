@@ -1,9 +1,10 @@
-"""V1 immutable publication. No old batch reads, global revision or archive scripts."""
+"""Immutable publication with lease, checkpoint and heartbeat keys."""
 from dataclasses import dataclass
 from redis.exceptions import RedisError
 from .protocol import asset, validate_envelope
+from .redis_keys import key_segment
 
-PREFIX = 'risk:v1:'
+PREFIX = 'risk:'
 
 
 class StorageError(RuntimeError):
@@ -26,21 +27,22 @@ class Publication:
 
 
 class RedisStore:
-    def __init__(self, client):
+    def __init__(self, client, ownership=None):
         self.client = client
-        self.publish_script = client.register_script(asset('risk-v1/publish.lua'))
-        self.lease_script = client.register_script(asset('risk-v1/lease.lua'))
-        self.heartbeat_script = client.register_script(asset('risk-v1/heartbeat.lua'))
+        self.ownership = ownership
+        self.publish_script = client.register_script(asset('risk/publish.lua'))
+        self.lease_script = client.register_script(asset('risk/lease.lua'))
+        self.heartbeat_script = client.register_script(asset('risk/heartbeat.lua'))
 
     def acquire(self, source, token):
         try:
-            return bool(self.client.set(PREFIX + 'lease:' + source, token, nx=True, px=30000))
+            return bool(self.client.set(PREFIX + 'lease:' + key_segment(source, max_bytes=80), token, nx=True, px=30000))
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
 
     def lease(self, operation, source, token):
         try:
-            result = self.lease_script(keys=[PREFIX + 'lease:' + source], args=[operation, source, token, '30000'])
+            result = self.lease_script(keys=[PREFIX + 'lease:' + key_segment(source, max_bytes=80)], args=[operation, source, token, '30000'])
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
         if result != 'OK':
@@ -53,11 +55,16 @@ class RedisStore:
             raise StorageError('REDIS_UNAVAILABLE') from None
 
     def heartbeat(self, now, last_event=''):
+        if self.ownership is None:
+            raise StorageError('COLLECTOR_LEASE_LOST')
+        keys, args = self.ownership.keys_args()
         try:
-            result = self.heartbeat_script(keys=[PREFIX + 'heartbeat'], args=[now, last_event or ''])
+            result = self.heartbeat_script(keys=[PREFIX + 'heartbeat'] + keys, args=[now, last_event or ''] + args)
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
         if result != 'OK':
+            if result == 'COLLECTOR_LEASE_LOST':
+                self.ownership.valid = False
             raise StorageError(result)
 
     def publish(self, publication):
@@ -66,15 +73,22 @@ class RedisStore:
         keys = [PREFIX + 'days', PREFIX + 'pending:' + publication.day,
                 PREFIX + 'batch:' + publication.day + ':' + publication.batch_id,
                 PREFIX + 'checkpoints',
-                PREFIX + 'lease:' + publication.source, PREFIX + 'heartbeat']
+                PREFIX + 'lease:' + key_segment(publication.source, max_bytes=80), PREFIX + 'heartbeat']
         args = [publication.batch_id, publication.day, publication.source, publication.token,
                 publication.expected_checkpoint, publication.new_checkpoint, publication.envelope,
                 publication.now, publication.last_event]
+        if self.ownership is None:
+            raise StorageError('COLLECTOR_LEASE_LOST')
+        owner_keys, owner_args = self.ownership.keys_args()
+        keys += owner_keys
+        args += owner_args
         try:
             result = self.publish_script(keys=keys, args=args)
         except RedisError:
             # Keep the same immutable Publication; next attempt can confirm ALREADY_COMMITTED.
             raise StorageError('REDIS_UNAVAILABLE') from None
         if result not in {'OK', 'ALREADY_COMMITTED'}:
+            if result == 'COLLECTOR_LEASE_LOST':
+                self.ownership.valid = False
             raise StorageError(result)
         return result
