@@ -80,8 +80,6 @@ def validate_record(row, encoded=None):
             raise ValueError()
         if row['requestType'] not in REQUEST_TYPES:
             raise ValueError()
-        if len(row['targetId']) == 19 and row['targetId'] > '9223372036854775807':
-            raise ValueError()
         _common_record(row, encoded)
     except (ValueError, TypeError, KeyError, OverflowError):
         raise ValueError('INVALID_RECORD') from None

@@ -1,6 +1,8 @@
 """Fixed-host password SSH; credentials never enter command arguments or diagnostics."""
 from dataclasses import dataclass, field
 from pathlib import Path
+import base64
+import binascii
 import ipaddress
 import os
 import re
@@ -66,25 +68,27 @@ def _binding(value):
     return SSHBinding(host, port, username, password)
 
 
-class SshAllowlist:
-    """The private local list must match the Java target host, port and account."""
-    def __init__(self, bindings=()):
-        self.bindings = tuple(bindings)
-        keys = [(item.host, item.port, item.username) for item in self.bindings]
-        if len(set(keys)) != len(keys):
-            raise SshBindingError()
+def decrypt_binding(connection, encoded_key):
+    """Decrypt a remote target only at sampling time; never expose secrets on failure."""
+    from cryptography.exceptions import UnsupportedAlgorithm
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-    @classmethod
-    def from_config(cls, values):
-        if not isinstance(values, list) or len(values) > 1000:
-            raise SshBindingError()
-        return cls(_binding(item) for item in values)
-
-    def resolve(self, connection):
-        for binding in self.bindings:
-            if (binding.host, binding.port, binding.username) == (connection.host, connection.port, connection.username):
-                return binding
-        raise SshBindingError('SSH_BINDING_UNAVAILABLE')
+    try:
+        if connection is None or not isinstance(encoded_key, str) or not isinstance(connection.password_ciphertext, str):
+            raise ValueError()
+        key = base64.b64decode(encoded_key, validate=True)
+        payload = base64.b64decode(connection.password_ciphertext, validate=True)
+        if len(key) != 16 or not payload or len(payload) % 16:
+            raise ValueError()
+        decryptor = Cipher(algorithms.SM4(key), modes.ECB()).decryptor()
+        unpadder = padding.PKCS7(128).unpadder()
+        padded = decryptor.update(payload) + decryptor.finalize()
+        password = (unpadder.update(padded) + unpadder.finalize()).decode('utf-8')
+        return _binding({'host': connection.host, 'port': connection.port,
+                         'username': connection.username, 'password': password})
+    except (ValueError, TypeError, binascii.Error, UnicodeError, UnsupportedAlgorithm):
+        raise SshBindingError('SSH_BINDING_UNAVAILABLE') from None
 
 
 class SshRunner:

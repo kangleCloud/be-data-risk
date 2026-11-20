@@ -9,5 +9,5 @@
   "geoServiceUrl": null,
   "geoServiceToken": null,
   "collectorId": null,
-  "sshServers": []
+  "sm4Key": null
 }

@@ -1,8 +1,5 @@
 """Offline actual Collector -> Lua publication fixture; only synthetic local data."""
 from pathlib import Path
-import copy
-from datetime import datetime
-import ipaddress
 import json
 import sys
 import tempfile
@@ -16,30 +13,19 @@ from risk.parsing import PrivacyPolicy
 from risk.service import Collector
 from risk.storage import RedisStore
 from risk.ownership import CollectorOwnership
-from risk.geo import UnifiedGeoClient
+from risk.geo import fallback_outcome
 from risk.protocol import validate_envelope
 
 NOW='2026-11-03T12:00:00.000+08:00'
 
 
 def export():
-    fixture=json.loads((Path(__file__).resolve().parents[1]/'tests/resources/geoip-v1/fixtures.json').read_text())
-    control=fixture['control']
-    base=copy.deepcopy(fixture['cases'][0]['result'])
     calls=[]
-    def transport(addresses, deadline):
-        calls.append(list(addresses))
-        rows=[]
-        for address in addresses:
-            row=copy.deepcopy(base)
-            row.update(ip=address,ipVersion=ipaddress.ip_address(address).version)
-            # The partial upstream result deliberately exercises a per-IP fallback.
-            if address=='1.1.1.1':row['cityName']=123
-            rows.append(row)
-        return {'success':True,'content':{'schemaVersion':1,'cacheVersion':control['cacheVersion'],'redisAvailable':True,'results':rows}}
-    cache=fakeredis.FakeRedis(decode_responses=True)
-    cache.hset('geoip:control',mapping=control)
-    geo=UnifiedGeoClient(cache,transport,epoch=lambda:datetime.fromisoformat('2026-11-03T12:00:00+08:00').timestamp())
+    class SyntheticGeo:
+        def resolve_many(self, addresses, budget):
+            calls.append(list(addresses))
+            return {address: fallback_outcome(address) for address in addresses}
+    geo=SyntheticGeo()
     def log(at='2026-11-03T11:00:59.999+08:00',uri='/api/行情/查询?token=synthetic-secret',address='114.247.50.2',status='200'):
         return {'@timestamp':at,'uri':uri,'remote_addr':address,'http_x_forwarded_for':'9.9.9.9',
                 'status':status,'request_method':'GET'}
@@ -59,7 +45,7 @@ def export():
         config=Config((SourceConfig('fixture',path),),PrivacyPolicy(direct_peer_trusted=True),65536)
         ids=iter(uuid.UUID(int=i) for i in range(1,50))
         with patch('risk.service.uuid.uuid4',side_effect=lambda:next(ids)):
-            collector=Collector(RedisStore(client, owner),config,clock=lambda:NOW,geo=geo,targets={'fixture':'1'})
+            collector=Collector(RedisStore(client, owner),config,clock=lambda:NOW,geo=geo)
             try:
                 while collector.tick():pass
                 collector.close()
@@ -69,7 +55,7 @@ def export():
             value=json.loads(client.get(key));validate_envelope(value);batches.append(value)
         checkpoint=json.loads(client.hget('risk:checkpoints','fixture'))
         assert int(checkpoint['offset'])==path.stat().st_size
-    client.close();cache.close()
+    client.close()
     result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':17,
             'geoLookupCalls':calls,'expected':{'requestCount':'17','successCount':'12','failureCount':'3','otherCount':'2',
              'sourceCount':'4','interfaceCount':'7','filteredLines':'0'},

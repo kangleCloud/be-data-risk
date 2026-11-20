@@ -27,7 +27,6 @@ class SourceState:
     reader: FileTailer
     checkpoint: str | None
     renewed_at: float
-    target_id: str | None = None
     rows: dict = field(default_factory=dict)
     day: str | None = None
     batch_id: str | None = None
@@ -40,12 +39,8 @@ class SourceState:
 
 
 class Collector:
-    def __init__(self, store, config, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None,
-                 targets=None):
+    def __init__(self, store, config, clock=now_iso, monotonic=time.monotonic, diagnostic=None, geo=None):
         self.store, self.config = store, config
-        self.targets = dict(targets or {})
-        if ({source.alias for source in config.sources} - set(self.targets)):
-            raise ValueError('TARGET_CONFIG_REQUIRED')
         self.geo = geo
         self.stage_limit = 100
         self.clock, self.monotonic = clock, monotonic
@@ -86,7 +81,7 @@ class Collector:
         except Exception:
             self.store.lease('RELEASE', source.alias, token)
             raise
-        state = SourceState(token, reader, encoded, self.monotonic(), self.targets.get(source.alias))
+        state = SourceState(token, reader, encoded, self.monotonic())
         self.states[source.alias] = state
         return state
 
@@ -211,8 +206,7 @@ class Collector:
                 event['region_code'] = outcome.region_code
                 event['geo'] = outcome.result or {}
                 event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
-                target_id = state.target_id or self.targets[source.alias]
-                rows = event_records(event, target_id)
+                rows = event_records(event)
                 reasons = event['quality']
             state.staged.append((candidate, now, day, event_at, rows, reasons))
         if frames and state.started_at is None:

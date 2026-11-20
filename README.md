@@ -1,6 +1,6 @@
 # be-data-risk
 
-Python 只读采集 Nginx 完成请求并采集本机或受控远程主机的资源，按目标、请求类别、分钟、方法、脱敏路径、可信 IP 和状态聚合。Java 负责目标配置、Geo 定位、入库与查询。跨端约定以工作区根 `docs/risk-monitor-v1-contract.md` 为准。
+Python 只读采集 Nginx 完成请求并采集本机或受控远程主机的资源，按日志来源、请求类别、分钟、方法、脱敏路径、可信 IP 和状态聚合。Java 负责目标配置、Geo 定位、入库与查询。
 
 ## 配置与启动
 
@@ -13,9 +13,11 @@ cp .env.example .env.prod
 .venv/bin/python -m risk --config .env.prod
 ```
 
-在私有 `.env.prod` 中配置 Redis、`COLLECTOR_ID`、可信代理、本地日志源及 Geo。REMOTE 目标的主机、端口、账号和密码使用本机 `SSH_SERVERS` 列表，格式见 `.env.example`；不要提交真实凭据。Java 向 `risk:monitor:config` 发布完整配置快照后，采集器按主机、端口和账号匹配自己负责的目标。Java 仍要求目标配置填写 `credentialAlias`，该值不存密码；采集器不依赖该别名匹配。首次无法取得配置则不采集；配置失联时保留进程内最近快照并报告过期。LOCAL 可只采资源而不绑定日志源。
+在私有 `.env.prod` 中配置 Redis、`COLLECTOR_ID`、可信代理、本地日志源及 Geo。远程资源采集还需设置 `SM4_KEY`，其值为 Java 原有 `Sm4Utils` 的 16 字节 UTF-8 密钥的 Base64 编码；不要提交密钥。Java 将加密后的 SSH 密码随监控配置快照发布到 Redis，Python 仅在启用远程目标采样时解密。LOCAL 直接采集，不读取密码。Nginx 日志按本机日志源采集，不依赖资源监控目标的启停或配置快照。
 
-远程密码认证需在采集机安装 `sshpass`（Debian：`apt install sshpass`），并在采集服务用户的 `~/.ssh/known_hosts` 中预先登记经可信渠道核实的远程主机公钥。程序强制校验主机密钥，密码经文件描述符传递，不放入 SSH 命令参数或 Redis。
+旧私有配置如含 `SSH_SERVERS`（JSON 格式为 `sshServers`），需自行移除旧字段后再启动；程序不会自动修改私有配置。
+
+远程密码认证需在采集机安装 `sshpass`（Debian：`apt install sshpass`），并在采集服务用户的 `~/.ssh/known_hosts` 中预先登记经可信渠道核实的远程主机公钥。程序强制校验主机密钥，明文密码经文件描述符传递，不放入 SSH 命令参数、Redis 或日志。SM4 解密使用与 Java 相同的 ECB/PKCS5Padding 格式。
 
 默认 `--config` 不读取环境变量或执行 shell；`--once` 处理当前完整日志及当前资源采集，`--check-file` 仅检查合成样本。systemd 样例在 `deploy/systemd/be-data-risk.service`，不自动安装或启动。
 
@@ -27,7 +29,7 @@ Geo 内部接口示例为 `http://127.0.0.1:19004/scheduler/api/internal/risk/ge
 
 访问批次、配置和资源样本均采用 `schemaVersion=2`。固定 Redis 键为 `risk:days`、`risk:pending:*`、`risk:batch:*`、`risk:checkpoints`、`risk:lease:*`、`risk:heartbeat`、`risk:monitor:config`、`risk:monitor:lease:*`、`risk:monitor:resource:*`；Geo 使用 `geoip:control`、`geoip:result:*`、`geoip:metrics:*`。动态源 ID、采集器 ID 和 Geo cacheVersion 作为 key 段时按 UTF-8 转大写十六进制；报文和检查点 Hash 字段保留原值。源和采集器 ID 限 80 字节，Geo cacheVersion 限 256 字节。
 
-日志读取支持半行、轮转和截断，按 10 秒/500 行/1MiB 提交，批次与检查点原子发布；不确定时保持 ID 和正文重试。资源采样覆盖写入 `risk:monitor:resource:current:{targetId}`，按周期过期；写入失败仅记录固定诊断，下个周期重新采样。采集器租约失效或续租无法确认时停止提交，由服务管理器重启；普通 Nginx 来源覆盖标记为 UNKNOWN。SSH 只使用本机服务器列表与固定只读命令，严格检查主机密钥，拒绝任意远程命令。
+日志读取支持半行、轮转和截断，按 10 秒/500 行/1MiB 提交，批次与检查点原子发布；不确定时保持 ID 和正文重试。资源采样覆盖写入 `risk:monitor:resource:current:{targetId}`，按周期过期；写入失败仅记录固定诊断，下个周期重新采样。采集器租约失效或续租无法确认时停止提交，由服务管理器重启；普通 Nginx 来源覆盖标记为 UNKNOWN。SSH 只执行固定只读命令，严格检查主机密钥。
 
 ## 切换预览
 
