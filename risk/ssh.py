@@ -16,6 +16,11 @@ from .resources import REMOTE_PROBE_COMMAND
 SSH_FAILURES = frozenset({
     'SSH_BINDING_UNAVAILABLE', 'SSH_CONNECTION_FAILED',
 })
+SSHPASS_FAILURES = {
+    5: 'SSH_AUTH_REJECTED',
+    6: 'SSH_HOST_KEY_UNKNOWN',
+    7: 'SSH_HOST_KEY_MISMATCH',
+}
 HOST_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
 
 
@@ -128,6 +133,8 @@ class SshRunner:
             os.write(write_fd, binding.password.encode('utf-8') + b'\n')
             process = self.popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, close_fds=True, pass_fds=(read_fd,), start_new_session=True)
+        except FileNotFoundError:
+            return SshResult(False, failure_code='SSHPASS_UNAVAILABLE')
         except (OSError, ValueError):
             return SshResult(False, failure_code='SSH_CONNECTION_FAILED')
         finally:
@@ -163,10 +170,17 @@ class SshRunner:
             if time.monotonic() > deadline:
                 self._kill(process)
                 return SshResult(False, failure_code='SSH_COMMAND_TIMEOUT')
-            text = bytes(output).decode('utf-8', errors='replace')
             if code != 0:
-                return SshResult(False, failure_code='SSH_CONNECTION_FAILED')
-            return SshResult(True, text)
+                failure = SSHPASS_FAILURES.get(code, 'SSH_CONNECTION_FAILED')
+                # OpenSSH can return 255 directly without a specific sshpass code.
+                if code == 255 and b'Host key verification failed.' in output:
+                    failure = 'SSH_HOST_KEY_VERIFICATION_FAILED'
+                elif code == 255 and b'Permission denied (' in output:
+                    failure = 'SSH_AUTH_REJECTED'
+                elif code == 255 and b'ssh: connect to host ' in output:
+                    failure = 'SSH_NETWORK_FAILED'
+                return SshResult(False, failure_code=failure)
+            return SshResult(True, output.decode('utf-8', errors='replace'))
         finally:
             try:
                 selector.close()
