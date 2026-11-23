@@ -66,7 +66,7 @@ def _valid_result(result, address, control, now):
         return False
     if result['cacheVersion'] != control['cacheVersion']:
         return False
-    if _time(result['expiresAt']) <= now or _time(result['resolvedAt']) > now or _time(result['resolvedAt']) > _time(result['expiresAt']):
+    if _time(result['expiresTime']) <= now or _time(result['resolvedTime']) > now or _time(result['resolvedTime']) > _time(result['expiresTime']):
         return False
     dimensions = {key: result[key] or '' for key in ('countryCode','provinceCode','provinceName','cityCode','cityName')}
     dimensions['locationLevel'] = result['locationLevel']
@@ -252,7 +252,7 @@ class UnifiedGeoClient:
                 pipe=self.cache.pipeline(transaction=False)
                 for key,value in metrics.items():pipe.hincrby('geoip:metrics:python',key,value)
                 from .parsing import SHANGHAI
-                pipe.hset('geoip:metrics:python','reportedAt',datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
+                pipe.hset('geoip:metrics:python','reportedTime',datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
                 pipe.execute()
             except Exception:
                 pass

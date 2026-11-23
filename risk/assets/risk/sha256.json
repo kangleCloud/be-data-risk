@@ -1,9 +1,5 @@
 {
   "runtime": {
-    "envelope.schema.json": "9f605f6a93cc50a40f6c72715633d43f2688a97c8bd96a61861779bcca851673",
-    "heartbeat.lua": "3e31aafeb23036f0712cfcb1b18dd9111c2ba9e3294d485bf03774de4034905a",
-    "lease.lua": "c7c6dc7190eeec3556d1cc5184062526e40518d09b82a8834268c82aba1df496",
-    "publish.lua": "e9dcc72fbcc4e7fd26efc0e7fa49e0c72506fb5e53828f777e4f18477bd6fb82",
-    "record.schema.json": "e1a6bdcb48a9878e4b198acc0be0e051cca40b4da4456ce52076481897016cad"
+    "record.schema.json": "09666f0aaadd2e94ccea0d5ebd8a94bef137c9c49aea6fc0eba3d01a91ebf9e5"
   }
 }

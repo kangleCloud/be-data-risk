@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["redis>=5,<7", "jsonschema>=4,<5", "cryptography>=42,<49"]
 
 [project.optional-dependencies]
-test = ["fakeredis[lua]>=2.30,<3", "build>=1,<2"]
+test = ["fakeredis>=2.30,<3", "build>=1,<2"]
 
 [tool.setuptools]
 packages = ["risk"]

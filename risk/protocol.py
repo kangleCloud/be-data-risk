@@ -11,7 +11,6 @@ from .geo_dimensions import valid_geo_dimensions
 
 ASSETS = Path(__file__).with_name('assets')
 MAX_RECORDS = 500
-MAX_BYTES = 1048576
 MAX_COUNT = 9223372036854775807
 REQUEST_TYPES = frozenset({'API', 'PAGE', 'STATIC', 'OTHER'})
 
@@ -33,19 +32,16 @@ verify_assets()
 
 def _validator(directory, name):
     schema = json.loads(asset(directory + '/' + name))
-    if name == 'envelope.schema.json':
-        schema['properties']['records']['items'] = json.loads(asset(directory + '/record.schema.json'))
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 _SCHEMA = _validator('risk', 'record.schema.json')
-_ENVELOPE = _validator('risk', 'envelope.schema.json')
 
 
 def _common_record(row, encoded=None):
     if not valid_stored_path(row['pathTemplate']):
         raise ValueError()
-    instant = datetime.fromisoformat(row['minuteAt'])
+    instant = datetime.fromisoformat(row['minuteTime'])
     if instant.second or instant.microsecond:
         raise ValueError()
     address = row['sourceIp']
@@ -83,33 +79,3 @@ def validate_record(row, encoded=None):
         _common_record(row, encoded)
     except (ValueError, TypeError, KeyError, OverflowError):
         raise ValueError('INVALID_RECORD') from None
-
-
-def _validate_envelope(envelope, validator, record_validator, encoded=None):
-    from .aggregation import identity
-    if not validator.is_valid(envelope) or type(envelope['schemaVersion']) is not int:
-        raise ValueError('INVALID_ENVELOPE')
-    seen = set()
-    for row in envelope['records']:
-        record_validator(row)
-        key = identity(row)
-        if row['minuteAt'][:10] != envelope['businessDate'] or key in seen:
-            raise ValueError('INVALID_ENVELOPE')
-        seen.add(key)
-    actual = canonical(envelope)
-    if len(actual) > MAX_BYTES:
-        raise ValueError('RECORD_TOO_LARGE')
-    if encoded is not None and encoded != actual.decode():
-        raise ValueError('NON_CANONICAL_ENVELOPE')
-    return actual.decode()
-
-
-def validate_envelope(envelope, encoded=None):
-    return _validate_envelope(envelope, _ENVELOPE, validate_record, encoded)
-
-
-def make_envelope(batch_id, day, now, rows, source_id):
-    envelope = {'schemaVersion': 2, 'batchId': batch_id, 'businessDate': day,
-                'createdAt': now, 'sourceId': source_id, 'records': rows}
-    validate_envelope(envelope)
-    return envelope

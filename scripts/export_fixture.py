@@ -1,22 +1,18 @@
-"""Offline actual Collector -> Lua publication fixture; only synthetic local data."""
+"""Offline actual Collector -> Redis queue fixture; only synthetic local data."""
 from pathlib import Path
 import json
 import sys
 import tempfile
-from unittest.mock import patch
-import uuid
 import fakeredis
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from risk.config import Config, SourceConfig
 from risk.parsing import PrivacyPolicy
 from risk.service import Collector
-from risk.storage import RedisStore
-from risk.ownership import CollectorOwnership
+from risk.storage import HTTP_QUEUE, RedisStore
 from risk.geo import fallback_outcome
-from risk.protocol import validate_envelope
 
-NOW='2026-11-03T12:00:00.000+08:00'
+NOW='2026-11-04T12:00:00.000+08:00'
 
 
 def export():
@@ -37,34 +33,27 @@ def export():
             log(uri='/scheduler/api/internal/risk/geo/resolve-batch'),log(uri='/admin/api/risk/dashboard'),
             log(at='2026-11-04T00:00:00.000+08:00',uri='/api/token/synthetic-secret-value',status='204')]
     client=fakeredis.FakeRedis(decode_responses=True)
-    owner=CollectorOwnership(client, 'fixture-collector')
-    owner.acquire()
     with tempfile.TemporaryDirectory() as folder:
         path=Path(folder)/'synthetic.log'
         path.write_bytes(b''.join(json.dumps(row,ensure_ascii=False).encode()+b'\n' for row in inputs))
         config=Config((SourceConfig('fixture',path),),PrivacyPolicy(direct_peer_trusted=True),65536)
-        ids=iter(uuid.UUID(int=i) for i in range(1,50))
-        with patch('risk.service.uuid.uuid4',side_effect=lambda:next(ids)):
-            collector=Collector(RedisStore(client, owner),config,clock=lambda:NOW,geo=geo)
-            try:
-                while collector.tick():pass
-                collector.close()
-            finally:collector.close(flush=False)
-        batches=[]
-        for key in sorted(client.scan_iter('risk:batch:*')):
-            value=json.loads(client.get(key));validate_envelope(value);batches.append(value)
+        collector=Collector(RedisStore(client),config,clock=lambda:NOW,geo=geo)
+        try:
+            while collector.tick():pass
+            collector.close()
+        finally:collector.close(flush=False)
+        records=client.lrange(HTTP_QUEUE, 0, -1)
         checkpoint=json.loads(client.hget('risk:checkpoints','fixture'))
         assert int(checkpoint['offset'])==path.stat().st_size
     client.close()
-    result={'synthetic':True,'batches':batches,'inputLines':len(inputs),'acceptedRequests':17,
+    result={'synthetic':True,'records':records,'inputLines':len(inputs),'acceptedRequests':17,
             'geoLookupCalls':calls,'expected':{'requestCount':'17','successCount':'12','failureCount':'3','otherCount':'2',
-             'sourceCount':'4','interfaceCount':'7','filteredLines':'0'},
-            'canonicalEnvelopes':[json.dumps(v,sort_keys=True,ensure_ascii=False,separators=(',',':')) for v in batches]}
-    assert sum(int(row['requestCount']) for batch in batches for row in batch['records'] )==17
+             'sourceCount':'4','interfaceCount':'7','filteredLines':'0'}}
+    assert sum(int(json.loads(row)['requestCount']) for row in records)==17
     return result
 
 
 if __name__=='__main__':
-    destination=Path(sys.argv[1] if len(sys.argv)>1 else '/tmp/risk-minute-python-envelope.json')
+    destination=Path(sys.argv[1] if len(sys.argv)>1 else '/tmp/risk-minute-python-records.json')
     destination.write_text(json.dumps(export(),ensure_ascii=False,indent=2)+'\n')
     print(str(destination))

@@ -15,7 +15,7 @@
     "pointType",
     "ip",
     "regionCode",
-    "resolvedAt",
+    "resolvedTime",
     "ipVersion",
     "geoGroup",
     "locationLevel",
@@ -25,7 +25,7 @@
     "cityGeoNameId",
     "databaseVersion",
     "cacheVersion",
-    "expiresAt",
+    "expiresTime",
     "fieldSources",
     "databaseVersions",
     "conflictFields"
@@ -97,7 +97,7 @@
     "regionCode": {
       "type": "string"
     },
-    "resolvedAt": {
+    "resolvedTime": {
       "type": "string"
     },
     "ipVersion": {
@@ -163,7 +163,7 @@
     "cacheVersion": {
       "type": "string"
     },
-    "expiresAt": {
+    "expiresTime": {
       "type": "string"
     },
     "fieldSources": {

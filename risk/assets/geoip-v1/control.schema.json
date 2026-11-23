@@ -5,7 +5,7 @@
   "required": [
     "cacheVersion",
     "providerSetVersion",
-    "publishedAt"
+    "publishedTime"
   ],
   "properties": {
     "cacheVersion": {
@@ -16,7 +16,7 @@
       "type": "string",
       "minLength": 1
     },
-    "publishedAt": {
+    "publishedTime": {
       "type": "string",
       "minLength": 1
     }
