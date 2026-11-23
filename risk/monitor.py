@@ -12,7 +12,7 @@ from .monitor_config import MonitorConfigSync, MonitorConfigError
 from .parsing import SHANGHAI
 from .resources import ProbeFailure, RemoteProbe, ResourceScheduler, ResourceStore
 from .service import Collector
-from .ssh import SshAllowlist, SshBindingError, SshRunner
+from .ssh import SshBindingError, SshRunner, decrypt_binding
 from .storage import RedisStore, StorageError
 from .ownership import CollectorOwnership
 from .protocol import asset
@@ -29,27 +29,19 @@ class MonitorRuntimeError(RuntimeError):
 class LocalPlan:
     version: str | None
     sources: tuple[SourceConfig, ...]
-    targets: dict
     signature: tuple
     monitor_targets: tuple = ()
 
 
 def _build_plan(config, monitor):
-    source_by_alias = {source.alias: source for source in config.sources}
     targets = monitor.for_collector(config.collector_id)
-    mapping = {}
-    for target in targets:
-        if target.local and target.log_source_id is not None:
-            if target.log_source_id not in source_by_alias:
-                raise MonitorConfigError('CONFIG_TARGET_INVALID')
-            mapping[target.log_source_id] = target.target_id
-    sources = tuple(source for source in config.sources if source.alias in mapping)
-    signature = (tuple(sorted(mapping.items())), tuple(source.alias for source in sources))
-    return LocalPlan(monitor.version, sources, mapping, signature, targets)
+    sources = config.sources
+    signature = tuple((source.alias, str(source.path)) for source in sources)
+    return LocalPlan(monitor.version, sources, signature, targets)
 
 
 class MonitorRuntime:
-    def __init__(self, config, client, *, store=None, sync=None, allowlist=None, runner=None,
+    def __init__(self, config, client, *, store=None, sync=None, runner=None,
                  geo=None, clock=None, monotonic=time.monotonic,
                  diagnostic=None, sleep=time.sleep, local_probe=None, lease_wait=35):
         if not config.collector_id:
@@ -61,7 +53,6 @@ class MonitorRuntime:
         self.store.ownership = self.ownership
         self.status_script = client.register_script(asset('monitor/collector-status.lua'))
         self.sync = sync or MonitorConfigSync(client)
-        self.allowlist = allowlist or SshAllowlist(())
         self.runner = runner or SshRunner()
         self.geo = geo
         self.clock = clock or (lambda: datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
@@ -79,7 +70,7 @@ class MonitorRuntime:
         self.last_status = None
         self.last_status_at = None
         self.applied_version = None
-        self.applied_targets = {}
+        self.applied_sources = ()
         self.apply_error = None
 
     def _renew_owner(self):
@@ -103,9 +94,9 @@ class MonitorRuntime:
                  'epoch': self.ownership.epoch, 'updatedAtMillis': '0',
                  'configState': state, 'appliedConfigVersion': self.applied_version,
                  'observedConfigVersion': observed, 'configError': config_error,
-                 'sources': [{'sourceId': source, 'targetId': target,
+                 'sources': [{'sourceId': source,
                               'coverageFromMillis': None, 'coverageThroughMillis': None,
-                              'continuity': 'UNKNOWN'} for source, target in sorted(self.applied_targets.items())]}
+                              'continuity': 'UNKNOWN'} for source in sorted(self.applied_sources)]}
         body = canonical(value).decode()
         now = self.monotonic()
         if not force and body == self.last_status and self.last_status_at is not None and now - self.last_status_at < 10:
@@ -134,7 +125,7 @@ class MonitorRuntime:
 
     def _remote_probe(self, target):
         try:
-            binding = self.allowlist.resolve(target.connection)
+            binding = decrypt_binding(target.connection, self.config.sm4_key)
         except SshBindingError as exc:
             raise ProbeFailure(exc.code) from None
         return RemoteProbe(self.runner, binding, timeout=30)
@@ -151,8 +142,7 @@ class MonitorRuntime:
             return
         collector = Collector(self.store, replace(self.config, sources=plan.sources),
                               clock=self.clock, monotonic=self.monotonic,
-                              diagnostic=self.diagnostic, geo=self.geo,
-                              targets=plan.targets)
+                              diagnostic=self.diagnostic, geo=self.geo)
         try:
             deadline = self.monotonic() + self.lease_wait
             while True:
@@ -183,7 +173,7 @@ class MonitorRuntime:
             self.resources.update_config(plan.version or '0', plan.monitor_targets)
         self.pending_plan = None
         self.applied_version = plan.version
-        self.applied_targets = dict(plan.targets)
+        self.applied_sources = tuple(source.alias for source in plan.sources)
         self.apply_error = None
 
     def start(self):
@@ -191,9 +181,6 @@ class MonitorRuntime:
         self.last_renewed = self.monotonic()
         self.sync.refresh(force=True)
         self._report_sync()
-        if not self.sync.status.loaded:
-            self._publish_status(force=True)
-            raise MonitorRuntimeError('CONFIG_UNAVAILABLE')
         try:
             plan = _build_plan(self.config, self.sync.current)
         except MonitorConfigError as exc:
@@ -224,7 +211,7 @@ class MonitorRuntime:
                                              tuple(target for target in self.sync.current.for_collector(self.config.collector_id)))
             self.pending_plan = None
             self.applied_version = plan.version
-            self.applied_targets = dict(plan.targets)
+            self.applied_sources = tuple(source.alias for source in plan.sources)
             self.apply_error = None
             return
         self.pending_plan = plan
@@ -296,13 +283,12 @@ def run_monitor(config, once=False):
     geo_cache = make_geo_cache_client(config.redis_url)
     transport = InternalBatchHttp(config.geo_service_url, config.geo_service_token) if config.geo_service_url else None
     geo = UnifiedGeoClient(geo_cache, transport)
-    allowlist = SshAllowlist(config.ssh_servers)
     client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
     stop = threading.Event()
     previous_handlers = {}
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.signal(signum, lambda *_: stop.set())
-    runtime = MonitorRuntime(config, client, allowlist=allowlist, geo=geo, diagnostic=diagnostic)
+    runtime = MonitorRuntime(config, client, geo=geo, diagnostic=diagnostic)
     try:
         runtime.start()
         while not stop.is_set():

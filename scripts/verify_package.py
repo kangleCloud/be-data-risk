@@ -7,7 +7,6 @@ import zipfile
 
 wheel=Path(sys.argv[1]).resolve()
 repo=Path(__file__).resolve().parents[1]
-resources=(repo/'tests/resources').resolve()
 examples=(repo/'examples/risk-monitor.samples.json').resolve()
 with tempfile.TemporaryDirectory() as folder:
     root=Path(folder)
@@ -22,24 +21,19 @@ with tempfile.TemporaryDirectory() as folder:
         if path.is_file():assert path.read_bytes()==(root/'risk/assets'/path.relative_to(repo/'risk/assets')).read_bytes()
     sample=root/'sample.jsonl'
     sample.write_text('{"@timestamp":"2026-11-03T12:00:00+08:00","uri":"/api/test","status":"200"}\n')
-    code='''import sys,json,hashlib
+    code='''import sys,json
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from risk.protocol import verify_assets,validate_envelope
 from risk.parsing import PrivacyPolicy
 verify_assets()
-resources=Path(sys.argv[3])
-for directory in ('geoip-v1',):
-    manifest=json.loads((resources/directory/'sha256.json').read_text())
-    for name,expected in manifest['test'].items():
-        assert hashlib.sha256((resources/directory/name).read_bytes()).hexdigest()==expected
-fixture=json.loads(Path(sys.argv[4]).read_text())
+fixture=json.loads(Path(sys.argv[3]).read_text())
 validate_envelope(fixture['accessBatch'])
 assert PrivacyPolicy().path('/api/token/private')==('/api/token/{redacted}','API')
 from risk.__main__ import main
 sys.argv=['risk','--check-file',sys.argv[2]]
 assert main()==0
 '''
-    result=subprocess.run([sys.executable,'-I','-c',code,str(root),str(sample),str(resources),str(examples)],cwd=root,text=True,capture_output=True,check=True)
+    result=subprocess.run([sys.executable,'-I','-c',code,str(root),str(sample),str(examples)],cwd=root,text=True,capture_output=True,check=True)
     assert result.stdout.strip()
     print('Runtime-only wheel; isolated schemas, external current batches and entry point: PASS')

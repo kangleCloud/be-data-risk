@@ -23,7 +23,7 @@ def export():
                    'generatedAt': '2026-11-19T10:00:00.000+08:00',
                    'targets': [{'targetId': '1', 'type': 'LOCAL', 'enabled': True,
                                 'collectorId': 'collector-v2', 'intervalSeconds': 30,
-                                'connection': None, 'logSourceId': 'nginx-v1'}]}
+                                'connection': None}]}
         client.hset('risk:monitor:config', mapping={'version': '42', 'payload': canonical(payload).decode(),
                                                    'publishedAt': payload['generatedAt']})
         runtime = MonitorRuntime(config, client, lease_wait=0)

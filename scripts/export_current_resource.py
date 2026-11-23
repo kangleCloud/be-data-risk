@@ -16,7 +16,7 @@ def export():
         owner = CollectorOwnership(client, 'collector-v2')
         owner.acquire()
         client.hset('risk:monitor:config', mapping={'version': '42'})
-        target = MonitorTarget('7', 'LOCAL', True, 'collector-v2', 30, None, None)
+        target = MonitorTarget('7', 'LOCAL', True, 'collector-v2', 30, None)
         class Probe:
             def snapshot(self):
                 return MetricsSnapshot(cpu_total=100, cpu_idle=40, memory_used=1024, memory_total=2048,

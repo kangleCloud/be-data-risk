@@ -56,20 +56,19 @@ local allowed={schemaVersion=true,batchId=true,businessDate=true,createdAt=true,
 local fields=0
 for key,_ in pairs(envelope) do if not allowed[key] then return 'INVALID_ARGUMENT' end fields=fields+1 end
 if fields~=6 or envelope.schemaVersion~=2 or envelope.batchId~=batch or envelope.businessDate~=day or envelope.createdAt~=now or envelope.sourceId~=source or type(envelope.records)~='table' or #envelope.records>500 then return 'INVALID_ARGUMENT' end
-local rowFields={minuteAt=true,method=true,pathTemplate=true,sourceIp=true,httpStatus=true,requestCount=true,regionCode=true,countryCode=true,provinceCode=true,provinceName=true,cityCode=true,cityName=true,targetId=true,requestType=true}
+local rowFields={minuteAt=true,method=true,pathTemplate=true,sourceIp=true,httpStatus=true,requestCount=true,regionCode=true,countryCode=true,provinceCode=true,provinceName=true,cityCode=true,cityName=true,requestType=true}
 local seen={}
 for _,row in ipairs(envelope.records) do
  if type(row)~='table' then return 'INVALID_ARGUMENT' end
  local count=0
  for key,_ in pairs(row) do if not rowFields[key] then return 'INVALID_ARGUMENT' end count=count+1 end
- if count~=14 or not instant(row.minuteAt) or string.sub(row.minuteAt,1,10)~=day or string.sub(row.minuteAt,18,23)~='00.000' or type(row.method)~='string' or #row.method<2 or #row.method>12 or not string.match(row.method,'^[A-Z]+$') or type(row.pathTemplate)~='string' or string.sub(row.pathTemplate,1,1)~='/' or type(row.httpStatus)~='number' or row.httpStatus%1~=0 or (row.httpStatus~=0 and (row.httpStatus<100 or row.httpStatus>599)) then return 'INVALID_ARGUMENT' end
+ if count~=13 or not instant(row.minuteAt) or string.sub(row.minuteAt,1,10)~=day or string.sub(row.minuteAt,18,23)~='00.000' or type(row.method)~='string' or #row.method<2 or #row.method>12 or not string.match(row.method,'^[A-Z]+$') or type(row.pathTemplate)~='string' or string.sub(row.pathTemplate,1,1)~='/' or type(row.httpStatus)~='number' or row.httpStatus%1~=0 or (row.httpStatus~=0 and (row.httpStatus<100 or row.httpStatus>599)) then return 'INVALID_ARGUMENT' end
  local n=row.requestCount
  if type(n)~='string' or not string.match(n,'^[1-9]%d*$') or #n>19 or (#n==19 and n>'9223372036854775807') then return 'INVALID_ARGUMENT' end
  for _,name in ipairs({'sourceIp','countryCode','provinceCode','provinceName','cityCode','cityName'}) do if row[name]~=cjson.null and (type(row[name])~='string' or #row[name]==0) then return 'INVALID_ARGUMENT' end end
  if type(row.regionCode)~='string' then return 'INVALID_ARGUMENT' end
- if type(row.targetId)~='string' or not string.match(row.targetId,'^[1-9]%d*$') or #row.targetId>19 or (#row.targetId==19 and row.targetId>'9223372036854775807') then return 'INVALID_ARGUMENT' end
  if row.requestType~='API' and row.requestType~='PAGE' and row.requestType~='STATIC' and row.requestType~='OTHER' then return 'INVALID_ARGUMENT' end
- local identity=cjson.encode({row.targetId,row.requestType,row.minuteAt,row.method,row.pathTemplate,row.sourceIp,row.httpStatus})
+ local identity=cjson.encode({row.requestType,row.minuteAt,row.method,row.pathTemplate,row.sourceIp,row.httpStatus})
  if seen[identity] then return 'INVALID_ARGUMENT' end
  seen[identity]=true
 end

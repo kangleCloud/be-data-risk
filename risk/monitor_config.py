@@ -1,5 +1,5 @@
 """Versioned complete monitor configuration from Redis; no local configuration cache."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import ipaddress
 import re
@@ -10,10 +10,8 @@ from .parsing import Rejected, strict_json, SHANGHAI
 CONFIG_KEY = 'risk:monitor:config'
 COLLECTOR_RE = re.compile(r'^[A-Za-z0-9_-]{1,80}$')
 TARGET_RE = re.compile(r'^[1-9][0-9]{0,18}$')
-SOURCE_RE = re.compile(r'^[A-Za-z0-9_-]{1,80}$')
 VERSION_RE = re.compile(r'^(?:0|[1-9][0-9]{0,19})$')
 USER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.-]{0,31}$')
-ALIAS_RE = re.compile(r'^[A-Za-z0-9_.-]{1,80}$')
 HOST_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
 MAX_TARGETS = 1000
 
@@ -62,7 +60,7 @@ class TargetConnection:
     host: str
     port: int
     username: str
-    credential_alias: str
+    password_ciphertext: str | None = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -73,7 +71,6 @@ class MonitorTarget:
     collector_id: str
     interval_seconds: int
     connection: TargetConnection | None
-    log_source_id: str | None
 
     @property
     def local(self):
@@ -83,7 +80,7 @@ class MonitorTarget:
 @dataclass(frozen=True)
 class MonitorConfig:
     version: str | None
-    payload: str | None
+    payload: str | None = field(repr=False)
     published_at: str | None
     targets: tuple[MonitorTarget, ...] = ()
     generated_at: str | None = None
@@ -113,24 +110,24 @@ class ConfigStatus:
 
 
 def _connection(value):
-    if not isinstance(value, dict) or set(value) != {'host', 'port', 'username', 'credentialAlias'}:
+    if not isinstance(value, dict) or set(value) != {'host', 'port', 'username', 'passwordCiphertext'}:
         raise MonitorConfigError()
-    host, port, username, alias = value['host'], value['port'], value['username'], value['credentialAlias']
+    host, port, username, ciphertext = value['host'], value['port'], value['username'], value['passwordCiphertext']
     if not _host(host) or type(port) is not int or not 1 <= port <= 65535:
         raise MonitorConfigError()
     if not isinstance(username, str) or not USER_RE.fullmatch(username):
         raise MonitorConfigError()
-    if not isinstance(alias, str) or not ALIAS_RE.fullmatch(alias):
+    if ciphertext is not None and (not isinstance(ciphertext, str) or not 1 <= len(ciphertext) <= 2048):
         raise MonitorConfigError()
-    return TargetConnection(host, port, username, alias)
+    return TargetConnection(host, port, username, ciphertext)
 
 
 def _target(value):
     if not isinstance(value, dict) or set(value) != {'targetId', 'type', 'enabled', 'collectorId',
-                                                       'intervalSeconds', 'connection', 'logSourceId'}:
+                                                       'intervalSeconds', 'connection'}:
         raise MonitorConfigError()
     target_id, kind, enabled, collector_id = value['targetId'], value['type'], value['enabled'], value['collectorId']
-    interval, connection, source = value['intervalSeconds'], value['connection'], value['logSourceId']
+    interval, connection = value['intervalSeconds'], value['connection']
     if not isinstance(target_id, str) or not TARGET_RE.fullmatch(target_id):
         raise MonitorConfigError()
     if len(target_id) == 19 and target_id > '9223372036854775807':
@@ -142,14 +139,12 @@ def _target(value):
     if type(interval) is not int or not 1 <= interval <= 86400:
         raise MonitorConfigError()
     if kind == 'LOCAL':
-        if connection is not None or (source is not None and (not isinstance(source, str) or not SOURCE_RE.fullmatch(source))):
+        if connection is not None:
             raise MonitorConfigError()
         parsed_connection = None
     else:
-        if source is not None:
-            raise MonitorConfigError()
         parsed_connection = _connection(connection)
-    return MonitorTarget(target_id, kind, enabled, collector_id, interval, parsed_connection, source)
+    return MonitorTarget(target_id, kind, enabled, collector_id, interval, parsed_connection)
 
 
 def parse_config(raw):
@@ -182,9 +177,6 @@ def parse_config(raw):
         raise MonitorConfigError()
     targets = tuple(_target(entry) for entry in entries)
     if len({target.target_id for target in targets}) != len(targets):
-        raise MonitorConfigError()
-    used = [target.log_source_id for target in targets if target.enabled and target.local and target.log_source_id is not None]
-    if len(set(used)) != len(used):
         raise MonitorConfigError()
     return MonitorConfig(version, payload, published, targets, value['generatedAt'])
 

@@ -16,7 +16,6 @@
     "provinceName",
     "cityCode",
     "cityName",
-    "targetId",
     "requestType"
   ],
   "properties": {
@@ -96,10 +95,6 @@
         "null"
       ],
       "maxLength": 512
-    },
-    "targetId": {
-      "type": "string",
-      "pattern": "^[1-9][0-9]{0,18}$"
     },
     "requestType": {
       "type": "string",
