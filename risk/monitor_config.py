@@ -81,9 +81,9 @@ class MonitorTarget:
 class MonitorConfig:
     version: str | None
     payload: str | None = field(repr=False)
-    published_at: str | None
+    published_time: str | None
     targets: tuple[MonitorTarget, ...] = ()
-    generated_at: str | None = None
+    generated_time: str | None = None
 
     @property
     def empty(self):
@@ -150,9 +150,9 @@ def _target(value):
 def parse_config(raw):
     if not raw:
         raise MonitorConfigError('CONFIG_UNAVAILABLE')
-    if set(raw) != {'version', 'payload', 'publishedAt'}:
+    if set(raw) != {'version', 'payload', 'publishedTime'}:
         raise MonitorConfigError()
-    version, payload, published = raw['version'], raw['payload'], raw['publishedAt']
+    version, payload, published = raw['version'], raw['payload'], raw['publishedTime']
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise MonitorConfigError()
     if not isinstance(published, str):
@@ -165,20 +165,20 @@ def parse_config(raw):
         value = strict_json(payload.encode('utf-8'))
     except (Rejected, UnicodeError):
         raise MonitorConfigError() from None
-    if set(value) != {'schemaVersion', 'configVersion', 'generatedAt', 'targets'}:
+    if set(value) != {'schemaVersion', 'configVersion', 'generatedTime', 'targets'}:
         raise MonitorConfigError()
     if type(value['schemaVersion']) is not int or value['schemaVersion'] != 2:
         raise MonitorConfigError()
     if value['configVersion'] != version:
         raise MonitorConfigError()
-    _time(value['generatedAt'])
+    _time(value['generatedTime'])
     entries = value['targets']
     if not isinstance(entries, list) or len(entries) > MAX_TARGETS:
         raise MonitorConfigError()
     targets = tuple(_target(entry) for entry in entries)
     if len({target.target_id for target in targets}) != len(targets):
         raise MonitorConfigError()
-    return MonitorConfig(version, payload, published, targets, value['generatedAt'])
+    return MonitorConfig(version, payload, published, targets, value['generatedTime'])
 
 
 class MonitorConfigSync:
@@ -189,7 +189,7 @@ class MonitorConfigSync:
         self.status = ConfigStatus()
         self.poll_seconds = poll_seconds
         self.clock = clock or (lambda: datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
-        self.last_read_at = 0.0
+        self.last_read_time = 0.0
         self.observed_version = None
 
     @property
@@ -200,10 +200,10 @@ class MonitorConfigSync:
         return self.clock()
 
     def refresh(self, monotonic_now=None, force=False):
-        if not force and monotonic_now is not None and monotonic_now - self.last_read_at < self.poll_seconds:
+        if not force and monotonic_now is not None and monotonic_now - self.last_read_time < self.poll_seconds:
             return False
         python_now = monotonic_now
-        self.last_read_at = python_now if python_now is not None else self.last_read_at
+        self.last_read_time = python_now if python_now is not None else self.last_read_time
         try:
             raw = self.client.hgetall(CONFIG_KEY)
         except RedisError:

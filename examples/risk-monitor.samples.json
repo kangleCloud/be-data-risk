@@ -1,36 +1,12 @@
 {
   "synthetic": true,
   "note": "Python-side proposal only; field/value freeze still requires main coordination. No real host, credential or data.",
-  "accessBatch": {
-    "schemaVersion": 2,
-    "batchId": "00000000-0000-4000-8000-000000000001",
-    "businessDate": "2026-11-16",
-    "createdAt": "2026-11-16T13:00:00.000+08:00",
-    "sourceId": "nginx_access",
-    "records": [
-      {
-        "minuteAt": "2026-11-16T12:59:00.000+08:00",
-        "method": "GET",
-        "pathTemplate": "/api/items/{id}",
-        "sourceIp": null,
-        "httpStatus": 200,
-        "requestCount": "1",
-        "regionCode": "UNKNOWN",
-        "countryCode": null,
-        "provinceCode": null,
-        "provinceName": null,
-        "cityCode": null,
-        "cityName": null,
-        "requestType": "API"
-      }
-    ]
-  },
   "resourceSample": {
     "schemaVersion": 2,
     "targetId": "1",
     "collectorId": "collector-a",
     "configVersion": "42",
-    "sampledAt": "2026-11-16T13:00:00.000+08:00",
+    "sampledTime": "2026-11-16T13:00:00.000+08:00",
     "status": "PARTIAL",
     "cpuPercent": null,
     "memoryUsedBytes": "1073741824",
@@ -45,6 +21,22 @@
       "cpu": "FIRST_SAMPLE",
       "networkRate": "FIRST_SAMPLE"
     },
-    "writtenAtMillis": "1795053600000"
+    "writtenTimeMillis": "1795053600000"
+  },
+  "accessRecord": {
+    "minuteTime": "2026-11-16T12:59:00.000+08:00",
+    "method": "GET",
+    "pathTemplate": "/api/items/{id}",
+    "sourceIp": null,
+    "httpStatus": 200,
+    "requestCount": "1",
+    "regionCode": "UNKNOWN",
+    "countryCode": null,
+    "provinceCode": null,
+    "provinceName": null,
+    "cityCode": null,
+    "cityName": null,
+    "requestType": "API",
+    "sourceId": "nginx_access"
   }
 }

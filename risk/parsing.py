@@ -136,7 +136,7 @@ def parse_observation(raw, policy):
         except ValueError:
             raw_path = ''
         geo_internal = raw_path in {'/scheduler/api/internal/risk/geo/resolve-batch', '/stock/scheduler/api/internal/risk/geo/resolve-batch', '/internal/risk/geo/resolve-batch'}
-        event = {'geo_internal': geo_internal, 'event_at': instant.isoformat(timespec='milliseconds'), 'business_date': instant.date().isoformat(),
+        event = {'geo_internal': geo_internal, 'event_time': instant.isoformat(timespec='milliseconds'), 'business_date': instant.date().isoformat(),
                  'path_template': template, 'request_type': kind, 'method': method,
                  'status': status, 'region_code': region, 'source_ip': address}
         event['quality'] = sorted(quality)

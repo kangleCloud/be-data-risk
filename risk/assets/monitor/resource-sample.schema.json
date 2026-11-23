@@ -8,8 +8,8 @@
     "targetId",
     "collectorId",
     "configVersion",
-    "sampledAt",
-    "writtenAtMillis",
+    "sampledTime",
+    "writtenTimeMillis",
     "status",
     "cpuPercent",
     "memoryUsedBytes",
@@ -39,7 +39,7 @@
       "type": "string",
       "pattern": "^(?:0|[1-9][0-9]{0,19})$"
     },
-    "sampledAt": {
+    "sampledTime": {
       "type": "string",
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+08:00$"
@@ -235,7 +235,7 @@
         }
       }
     },
-    "writtenAtMillis": {
+    "writtenTimeMillis": {
       "type": "string",
       "pattern": "^(?:0|[1-9][0-9]{0,19})$"
     }

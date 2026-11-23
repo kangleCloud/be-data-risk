@@ -10,12 +10,11 @@ import time
 from .config import SourceConfig
 from .monitor_config import MonitorConfigSync, MonitorConfigError
 from .parsing import SHANGHAI
+from .redis_keys import key_segment
 from .resources import ProbeFailure, RemoteProbe, ResourceScheduler, ResourceStore
 from .service import Collector
 from .ssh import SshBindingError, SshRunner, decrypt_binding
 from .storage import RedisStore, StorageError
-from .ownership import CollectorOwnership
-from .protocol import asset
 from .algorithms import canonical
 
 
@@ -43,15 +42,12 @@ def _build_plan(config, monitor):
 class MonitorRuntime:
     def __init__(self, config, client, *, store=None, sync=None, runner=None,
                  geo=None, clock=None, monotonic=time.monotonic,
-                 diagnostic=None, sleep=time.sleep, local_probe=None, lease_wait=35):
+                 diagnostic=None, sleep=time.sleep, local_probe=None):
         if not config.collector_id:
             raise MonitorRuntimeError('COLLECTOR_ID_REQUIRED')
         self.config = config
         self.client = client
-        self.ownership = CollectorOwnership(client, config.collector_id)
-        self.store = store or RedisStore(client, self.ownership)
-        self.store.ownership = self.ownership
-        self.status_script = client.register_script(asset('monitor/collector-status.lua'))
+        self.store = store or RedisStore(client)
         self.sync = sync or MonitorConfigSync(client)
         self.runner = runner or SshRunner()
         self.geo = geo
@@ -60,24 +56,16 @@ class MonitorRuntime:
         self.diagnostic = diagnostic or (lambda value: None)
         self.sleep = sleep
         self.local_probe = local_probe
-        self.lease_wait = lease_wait
         self.collector = None
         self.resources = None
         self.local_signature = None
         self.pending_plan = None
         self.last_sync_error = None
-        self.last_renewed = None
         self.last_status = None
-        self.last_status_at = None
+        self.last_status_time = None
         self.applied_version = None
         self.applied_sources = ()
         self.apply_error = None
-
-    def _renew_owner(self):
-        now = self.monotonic()
-        if self.last_renewed is None or now - self.last_renewed >= 10:
-            self.ownership.renew()
-            self.last_renewed = now
 
     def _publish_status(self, force=False):
         from redis.exceptions import RedisError
@@ -91,7 +79,7 @@ class MonitorRuntime:
         else:
             state = 'APPLIED'
         value = {'schemaVersion': 2, 'collectorId': self.config.collector_id,
-                 'epoch': self.ownership.epoch, 'updatedAtMillis': '0',
+                 'updatedTimeMillis': '0',
                  'configState': state, 'appliedConfigVersion': self.applied_version,
                  'observedConfigVersion': observed, 'configError': config_error,
                  'sources': [{'sourceId': source,
@@ -99,21 +87,17 @@ class MonitorRuntime:
                               'continuity': 'UNKNOWN'} for source in sorted(self.applied_sources)]}
         body = canonical(value).decode()
         now = self.monotonic()
-        if not force and body == self.last_status and self.last_status_at is not None and now - self.last_status_at < 10:
+        if not force and body == self.last_status and self.last_status_time is not None and now - self.last_status_time < 10:
             return
-        keys, args = self.ownership.keys_args()
         try:
-            result = self.status_script(keys=keys, args=args + [body])
+            seconds, micros = self.client.time()
+            value['updatedTimeMillis'] = str(seconds * 1000 + micros // 1000)
+            self.client.hset('risk:heartbeat', 'monitor:' + key_segment(self.config.collector_id, max_bytes=80),
+                             canonical(value).decode())
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
-        try:
-            json.loads(result)
-        except (ValueError, TypeError):
-            if result == 'COLLECTOR_LEASE_LOST':
-                self.ownership.valid = False
-            raise StorageError(result) from None
-        self.last_status = canonical(value).decode()
-        self.last_status_at = now
+        self.last_status = body
+        self.last_status_time = now
 
     def _report_sync(self):
         status = self.sync.status
@@ -132,7 +116,7 @@ class MonitorRuntime:
 
     def _restart(self, plan):
         if self.collector is not None:
-            # Flush first; if Redis is unavailable the old collector and exact publication stay intact.
+            # Preserve any unsent local rows until the source checkpoint can be stored.
             self.collector.flush_all()
             self.collector.close(flush=False)
             self.collector = None
@@ -144,19 +128,9 @@ class MonitorRuntime:
                               clock=self.clock, monotonic=self.monotonic,
                               diagnostic=self.diagnostic, geo=self.geo)
         try:
-            deadline = self.monotonic() + self.lease_wait
-            while True:
-                try:
-                    collector.prepare_sources()
-                    break
-                except StorageError as exc:
-                    if exc.code != 'LEASE_LOST' or self.monotonic() >= deadline:
-                        raise
-                    self._renew_owner()
-                    collector.renew_leases()
-                    self.sleep(min(1, max(0, deadline - self.monotonic())))
+            collector.prepare_sources()
         except Exception:
-            collector.release_leases()
+            collector.close(flush=False)
             raise
         self.collector = collector
         self.local_signature = plan.signature
@@ -165,7 +139,7 @@ class MonitorRuntime:
         self._restart(plan)
         if self.resources is None:
             self.resources = ResourceScheduler(
-                ResourceStore(self.client, self.ownership), self.config.collector_id, plan.version or '0',
+                ResourceStore(self.client), self.config.collector_id, plan.version or '0',
                 plan.monitor_targets, clock=self.clock,
                 monotonic=self.monotonic, remote_probe_factory=self._remote_probe,
                 local_probe=self.local_probe, diagnostic=self.diagnostic, asynchronous=True)
@@ -177,8 +151,6 @@ class MonitorRuntime:
         self.apply_error = None
 
     def start(self):
-        self.ownership.acquire()
-        self.last_renewed = self.monotonic()
         self.sync.refresh(force=True)
         self._report_sync()
         try:
@@ -190,7 +162,7 @@ class MonitorRuntime:
         # Create independent delivery workers even for an empty valid config.
         if self.resources is None:
             self.resources = ResourceScheduler(
-                ResourceStore(self.client, self.ownership), self.config.collector_id, plan.version or '0', (),
+                ResourceStore(self.client), self.config.collector_id, plan.version or '0', (),
                 clock=self.clock, monotonic=self.monotonic,
                 remote_probe_factory=self._remote_probe, local_probe=self.local_probe,
                 diagnostic=self.diagnostic, asynchronous=True)
@@ -222,15 +194,12 @@ class MonitorRuntime:
         try:
             self._activate(self.pending_plan)
         except StorageError as exc:
-            if exc.code == 'COLLECTOR_LEASE_LOST':
-                raise
             if exc.code != 'REDIS_UNAVAILABLE':
                 self.diagnostic({'code': exc.code})
             return False
         return True
 
     def tick(self):
-        self._renew_owner()
         changed = self.sync.refresh(monotonic_now=self.monotonic())
         self._report_sync()
         if changed:
@@ -250,7 +219,7 @@ class MonitorRuntime:
         failure = None
         try:
             if self.collector is not None:
-                self.collector.close(flush=self.ownership.valid)
+                self.collector.close()
         except Exception as exc:
             failure = exc
             self.diagnostic({'code': getattr(exc, 'code', 'COLLECTOR_STOPPED')})
@@ -263,10 +232,6 @@ class MonitorRuntime:
                 self.resources.close()
                 self.resources = None
             self.local_signature = None
-            try:
-                self.ownership.release()
-            except StorageError:
-                pass
         if failure is not None:
             raise failure
 
@@ -275,6 +240,8 @@ def run_monitor(config, once=False):
     if not config.redis_url or not config.collector_id:
         raise MonitorRuntimeError('MONITOR_CONFIG_REQUIRED')
     import redis
+    from redis.backoff import NoBackoff
+    from redis.retry import Retry
     from .protocol import verify_assets
     verify_assets()
     def diagnostic(value):
@@ -283,7 +250,7 @@ def run_monitor(config, once=False):
     geo_cache = make_geo_cache_client(config.redis_url)
     transport = InternalBatchHttp(config.geo_service_url, config.geo_service_token) if config.geo_service_url else None
     geo = UnifiedGeoClient(geo_cache, transport)
-    client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
+    client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3, retry=Retry(NoBackoff(), 0))
     stop = threading.Event()
     previous_handlers = {}
     for signum in (signal.SIGTERM, signal.SIGINT):

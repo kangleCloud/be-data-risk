@@ -27,9 +27,9 @@ Geo 内部接口示例为 `http://127.0.0.1:19004/scheduler/api/internal/risk/ge
 
 所有完成请求归 `API/PAGE/STATIC/OTHER`；SSE 完成日志计入 OTHER，不表示连接数。风控及内部 Geo 请求计数，内部 Geo 请求不再发起 Geo 解析。路径去参数并脱敏，不保存原始日志、请求体或认证信息。资源样本将缺失值置 null，按 `cpu/memory/disk/networkRate/load/uptime` 记录固定原因。
 
-访问批次、配置和资源样本均采用 `schemaVersion=2`。固定 Redis 键为 `risk:days`、`risk:pending:*`、`risk:batch:*`、`risk:checkpoints`、`risk:lease:*`、`risk:heartbeat`、`risk:monitor:config`、`risk:monitor:lease:*`、`risk:monitor:resource:*`；Geo 使用 `geoip:control`、`geoip:result:*`、`geoip:metrics:*`。动态源 ID、采集器 ID 和 Geo cacheVersion 作为 key 段时按 UTF-8 转大写十六进制；报文和检查点 Hash 字段保留原值。源和采集器 ID 限 80 字节，Geo cacheVersion 限 256 字节。
+HTTP 分钟记录写入 `risk:http:pending`，检查点保存在 `risk:checkpoints`；其他键为 `risk:heartbeat`、`risk:monitor:config`、`risk:monitor:resource:current:{targetId}` 及 `geoip:*`。时间字段使用 `xxxTime`，配置与资源协议为 schemaVersion 2。
 
-日志读取支持半行、轮转和截断，按 10 秒/500 行/1MiB 提交，批次与检查点原子发布；不确定时保持 ID 和正文重试。资源采样覆盖写入 `risk:monitor:resource:current:{targetId}`，按周期过期；写入失败仅记录固定诊断，下个周期重新采样。采集器租约失效或续租无法确认时停止提交，由服务管理器重启；普通 Nginx 来源覆盖标记为 UNKNOWN。SSH 只执行固定只读命令，严格检查主机密钥。
+日志读取支持半行、轮转和截断。按最多 10 秒或 500 条聚合记录定期交付。先写检查点，入队失败不重投。每个采集器 ID 和每个日志来源只部署一个实例。资源样本使用带 TTL 的普通 SET，SSH 继续严格验证主机密钥。
 
 ## 切换预览
 
@@ -53,4 +53,4 @@ Geo 内部接口示例为 `http://127.0.0.1:19004/scheduler/api/internal/risk/ge
 .venv/bin/python scripts/verify_package.py /tmp/risk-dist/be_data_risk-0.1.1-py3-none-any.whl
 ```
 
-新风险 schema/Lua 为本仓库运行资产；Geo schema 依 Java 权威资产同步。离线验证和跨端待验范围见 `docs/verification.md`。
+风控和 GeoIP schema 随包交付。以根契约和当前离线测试为准，验证文档中的旧批次及 Lua 记录保留作历史说明。

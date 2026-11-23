@@ -6,40 +6,29 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fakeredis
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding
-
 from risk.aggregation import event_records, merge
 from risk.config import Config, SourceConfig, load_config
 from risk.monitor import MonitorRuntime, _build_plan
 from risk.monitor_config import MonitorConfig, MonitorTarget, TargetConnection, parse_config
-from risk.ownership import CollectorOwnership
 from risk.parsing import PrivacyPolicy
-from risk.protocol import validate_envelope
+from risk.protocol import validate_record
 from risk.resources import MetricsSnapshot, ResourceScheduler
 from risk.service import Collector
 from risk.ssh import SshBindingError, decrypt_binding
-from risk.storage import RedisStore
-
-
-def encrypted(password, key=bytes(range(16))):
-    padder = padding.PKCS7(128).padder()
-    padded = padder.update(password.encode()) + padder.finalize()
-    cipher = Cipher(algorithms.SM4(key), modes.ECB()).encryptor()
-    return base64.b64encode(cipher.update(padded) + cipher.finalize()).decode()
+from risk.storage import HTTP_QUEUE, RedisStore
 
 
 class MonitorContractTest(unittest.TestCase):
     def setUp(self):
-        self.key = base64.b64encode(bytes(range(16))).decode()
-        self.connection = TargetConnection('example.test', 22, 'monitor', encrypted('synthetic-password'))
+        self.key = base64.b64encode(bytes(16)).decode()
+        self.connection = TargetConnection('example.test', 22, 'monitor', 'D1bwnWAseX03lwevPGd14Q==')
 
     def test_password_decrypt_and_invalid_input(self):
         binding = decrypt_binding(self.connection, self.key)
-        self.assertEqual(binding.password, 'synthetic-password')
+        self.assertEqual(binding.password, 'risk-example')
         self.assertNotIn(binding.password, repr(binding))
         malformed = TargetConnection('example.test', 22, 'monitor', base64.b64encode(b'invalid').decode())
-        for connection, key in ((malformed, self.key), (self.connection, None), (self.connection, base64.b64encode(bytes(16)).decode())):
+        for connection, key in ((malformed, self.key), (self.connection, None), (self.connection, base64.b64encode(bytes(range(16))).decode())):
             with self.subTest(connection=connection), self.assertRaisesRegex(SshBindingError, 'SSH_BINDING_UNAVAILABLE'):
                 decrypt_binding(connection, key)
 
@@ -49,14 +38,14 @@ class MonitorContractTest(unittest.TestCase):
         self.assertEqual(decrypt_binding(connection, 'AAAAAAAAAAAAAAAAAAAAAA==').password, 'risk-example')
 
     def test_current_remote_configuration_and_local_key(self):
-        payload = {'schemaVersion': 2, 'configVersion': '1', 'generatedAt': '2026-11-19T12:00:00.000+08:00',
+        payload = {'schemaVersion': 2, 'configVersion': '1', 'generatedTime': '2026-11-19T12:00:00.000+08:00',
                    'targets': [{'targetId': '1', 'type': 'REMOTE', 'enabled': True, 'collectorId': 'c',
                                 'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
                                 'username': 'monitor', 'passwordCiphertext': self.connection.password_ciphertext}},
                                {'targetId': '2', 'type': 'REMOTE', 'enabled': False, 'collectorId': 'c',
                                 'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
                                 'username': 'monitor', 'passwordCiphertext': None}}]}
-        parsed = parse_config({'version': '1', 'payload': json.dumps(payload), 'publishedAt': payload['generatedAt']})
+        parsed = parse_config({'version': '1', 'payload': json.dumps(payload), 'publishedTime': payload['generatedTime']})
         self.assertEqual(parsed.targets[0].connection.password_ciphertext, self.connection.password_ciphertext)
         self.assertNotIn(self.connection.password_ciphertext, repr(parsed))
         with tempfile.TemporaryDirectory() as folder:
@@ -104,17 +93,17 @@ class MonitorContractTest(unittest.TestCase):
                 self.assertEqual(runtime.applied_sources, ('nginx_access',))
                 self.assertIsNone(runtime.applied_version)
                 runtime.close()
-                self.assertEqual(len(list(client.scan_iter('risk:batch:*'))), 1)
+                self.assertEqual(client.llen(HTTP_QUEUE), 1)
             finally:
                 runtime.close()
                 client.close()
 
     def test_minutes_group_without_monitor_target(self):
-        event = {'event_at': '2026-11-19T12:00:01.000+08:00', 'request_type': 'API',
+        event = {'event_time': '2026-11-19T12:00:01.000+08:00', 'request_type': 'API',
                  'method': 'GET', 'path_template': '/api/test', 'source_ip': '8.8.8.8',
                  'status': 200, 'region_code': 'UNKNOWN', 'geo': {}}
         row = event_records(event)[0]
-        self.assertEqual(row['minuteAt'], '2026-11-19T12:00:00.000+08:00')
+        self.assertEqual(row['minuteTime'], '2026-11-19T12:00:00.000+08:00')
         self.assertNotIn('targetId', row)
         self.assertEqual(merge(row, event_records(event)[0])['requestCount'], '2')
 
@@ -126,25 +115,27 @@ class MonitorContractTest(unittest.TestCase):
             path.write_text(json.dumps(event) + '\n', encoding='utf-8')
             config = Config((SourceConfig('nginx_access', path),), PrivacyPolicy(direct_peer_trusted=True), 65536)
             client = fakeredis.FakeRedis(decode_responses=True)
-            owner = CollectorOwnership(client, 'collector')
-            owner.acquire()
-            collector = Collector(RedisStore(client, owner), config,
+            collector = Collector(RedisStore(client), config,
                                   clock=lambda: '2026-11-19T12:00:02.000+08:00')
             try:
                 while collector.tick():
                     pass
                 collector.close()
-                keys = list(client.scan_iter('risk:batch:*'))
-                self.assertEqual(len(keys), 1)
-                batch = json.loads(client.get(keys[0]))
-                validate_envelope(batch)
-                self.assertEqual(batch['sourceId'], 'nginx_access')
-                self.assertNotIn('targetId', batch['records'][0])
-                self.assertNotIn('secret', client.get(keys[0]))
+                self.assertEqual(client.llen(HTTP_QUEUE), 1)
+                raw = client.lpop(HTTP_QUEUE)
+                row = json.loads(raw)
+                self.assertEqual(row.pop('sourceId'), 'nginx_access')
+                validate_record(row)
+                self.assertNotIn('targetId', row)
+                self.assertNotIn('secret', raw)
+                restarted = Collector(RedisStore(client), config, clock=collector.clock)
+                while restarted.tick():
+                    pass
+                restarted.close()
+                self.assertEqual(client.llen(HTTP_QUEUE), 0)
                 self.assertIsNotNone(client.hget('risk:checkpoints', 'nginx_access'))
             finally:
                 collector.close(flush=False)
-                owner.release()
                 client.close()
 
 

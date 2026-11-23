@@ -234,7 +234,7 @@ class Sample:
     body: str
 
 
-def build_sample(target, collector_id, config_version, sampled_at, snapshot, previous=None, elapsed=None,
+def build_sample(target, collector_id, config_version, sampled_time, snapshot, previous=None, elapsed=None,
                  failure=None):
     reasons = {}
     boot_changed = bool(previous and snapshot.boot_id and previous[0].boot_id
@@ -297,7 +297,7 @@ def build_sample(target, collector_id, config_version, sampled_at, snapshot, pre
     status = 'FAILED' if not any(value is not None for value in present) else ('PARTIAL' if reasons else 'SUCCEEDED')
     body = {
         'schemaVersion': 2, 'targetId': target.target_id,
-        'collectorId': collector_id, 'configVersion': config_version, 'sampledAt': sampled_at, 'writtenAtMillis': '0',
+        'collectorId': collector_id, 'configVersion': config_version, 'sampledTime': sampled_time, 'writtenTimeMillis': '0',
         'status': status, 'cpuPercent': cpu,
         'memoryUsedBytes': memory_used, 'memoryTotalBytes': memory_total,
         'diskUsedBytes': disk_used, 'diskTotalBytes': disk_total,
@@ -325,23 +325,18 @@ def validate_sample(body):
 
 
 class ResourceStore:
-    def __init__(self, client, ownership):
-        self.ownership = ownership
-        self.publish_script = client.register_script(asset('monitor/resource-publish.lua'))
+    def __init__(self, client):
+        self.client = client
 
-    def publish(self, collector_id, sample, interval_seconds):
+    def publish(self, sample, interval_seconds):
         body = json.loads(sample.body)
-        validate_sample(body)
-        owner_keys, owner_args = self.ownership.keys_args()
-        keys = [RESOURCE_PREFIX + 'current:' + sample.target_id, 'risk:monitor:config'] + owner_keys
         try:
-            result = self.publish_script(keys=keys, args=[sample.target_id, sample.body, str(interval_seconds)] + owner_args)
+            seconds, micros = self.client.time()
+            body['writtenTimeMillis'] = str(seconds * 1000 + micros // 1000)
+            self.client.set(RESOURCE_PREFIX + 'current:' + sample.target_id,
+                            canonical(body).decode(), ex=2 * (2 * interval_seconds + 10))
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
-        if result != 'OK':
-            if result == 'COLLECTOR_LEASE_LOST':
-                self.ownership.valid = False
-            raise StorageError(result)
 
 
 class ResourceScheduler:
@@ -385,7 +380,7 @@ class ResourceScheduler:
 
     def sample_target(self, target, config_version=None):
         config_version = self.config_version if config_version is None else config_version
-        sampled_at = self.clock()
+        sampled_time = self.clock()
         now = self.monotonic()
         previous = self.previous.get(target.target_id)
         elapsed = now - previous[1] if previous is not None else None
@@ -393,24 +388,22 @@ class ResourceScheduler:
             snapshot = self._probe(target).snapshot()
         except ProbeFailure as exc:
             self.previous.pop(target.target_id, None)
-            return build_sample(target, self.collector_id, config_version, sampled_at,
+            return build_sample(target, self.collector_id, config_version, sampled_time,
                                 MetricsSnapshot(), None, None, exc.code), exc.code
         except Exception:
             self.previous.pop(target.target_id, None)
-            return build_sample(target, self.collector_id, config_version, sampled_at,
+            return build_sample(target, self.collector_id, config_version, sampled_time,
                                 MetricsSnapshot(), None, None, 'SAMPLE_FAILED'), 'SAMPLE_FAILED'
         self.previous[target.target_id] = (snapshot, now)
-        return build_sample(target, self.collector_id, config_version, sampled_at,
+        return build_sample(target, self.collector_id, config_version, sampled_time,
                             snapshot, previous, elapsed), None
 
     def _deliver(self, target, sample, failure):
         if failure:
             self.diagnostic({'code': failure, 'collectorId': self.collector_id, 'targetId': target.target_id})
         try:
-            self.store.publish(self.collector_id, sample, target.interval_seconds)
+            self.store.publish(sample, target.interval_seconds)
         except StorageError as exc:
-            if exc.code == 'COLLECTOR_LEASE_LOST':
-                raise
             self.diagnostic({'code': exc.code, 'collectorId': self.collector_id, 'targetId': target.target_id})
         self.next_due[target.target_id] = self.monotonic() + target.interval_seconds
 

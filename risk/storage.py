@@ -1,10 +1,9 @@
-"""Immutable publication with lease, checkpoint and heartbeat keys."""
-from dataclasses import dataclass
+"""Bounded, best-effort HTTP statistics delivery."""
 from redis.exceptions import RedisError
-from .protocol import asset, validate_envelope
-from .redis_keys import key_segment
 
 PREFIX = 'risk:'
+HTTP_QUEUE = PREFIX + 'http:pending'
+QUEUE_LIMIT = 20000
 
 
 class StorageError(RuntimeError):
@@ -13,40 +12,9 @@ class StorageError(RuntimeError):
         super().__init__(code)
 
 
-@dataclass(frozen=True)
-class Publication:
-    source: str
-    token: str
-    expected_checkpoint: str
-    new_checkpoint: str
-    envelope: str
-    batch_id: str
-    day: str
-    now: str
-    last_event: str
-
-
 class RedisStore:
-    def __init__(self, client, ownership=None):
+    def __init__(self, client):
         self.client = client
-        self.ownership = ownership
-        self.publish_script = client.register_script(asset('risk/publish.lua'))
-        self.lease_script = client.register_script(asset('risk/lease.lua'))
-        self.heartbeat_script = client.register_script(asset('risk/heartbeat.lua'))
-
-    def acquire(self, source, token):
-        try:
-            return bool(self.client.set(PREFIX + 'lease:' + key_segment(source, max_bytes=80), token, nx=True, px=30000))
-        except RedisError:
-            raise StorageError('REDIS_UNAVAILABLE') from None
-
-    def lease(self, operation, source, token):
-        try:
-            result = self.lease_script(keys=[PREFIX + 'lease:' + key_segment(source, max_bytes=80)], args=[operation, source, token, '30000'])
-        except RedisError:
-            raise StorageError('REDIS_UNAVAILABLE') from None
-        if result != 'OK':
-            raise StorageError(result)
 
     def checkpoint(self, source):
         try:
@@ -55,40 +23,28 @@ class RedisStore:
             raise StorageError('REDIS_UNAVAILABLE') from None
 
     def heartbeat(self, now, last_event=''):
-        if self.ownership is None:
-            raise StorageError('COLLECTOR_LEASE_LOST')
-        keys, args = self.ownership.keys_args()
+        fields = {'collectorHeartbeatTime': now}
+        if last_event:
+            fields['lastEventTime'] = last_event
         try:
-            result = self.heartbeat_script(keys=[PREFIX + 'heartbeat'] + keys, args=[now, last_event or ''] + args)
+            self.client.hset(PREFIX + 'heartbeat', mapping=fields)
         except RedisError:
             raise StorageError('REDIS_UNAVAILABLE') from None
-        if result != 'OK':
-            if result == 'COLLECTOR_LEASE_LOST':
-                self.ownership.valid = False
-            raise StorageError(result)
 
-    def publish(self, publication):
-        import json
-        validate_envelope(json.loads(publication.envelope), publication.envelope)
-        keys = [PREFIX + 'days', PREFIX + 'pending:' + publication.day,
-                PREFIX + 'batch:' + publication.day + ':' + publication.batch_id,
-                PREFIX + 'checkpoints',
-                PREFIX + 'lease:' + key_segment(publication.source, max_bytes=80), PREFIX + 'heartbeat']
-        args = [publication.batch_id, publication.day, publication.source, publication.token,
-                publication.expected_checkpoint, publication.new_checkpoint, publication.envelope,
-                publication.now, publication.last_event]
-        if self.ownership is None:
-            raise StorageError('COLLECTOR_LEASE_LOST')
-        owner_keys, owner_args = self.ownership.keys_args()
-        keys += owner_keys
-        args += owner_args
+    def publish(self, source, checkpoint, records):
         try:
-            result = self.publish_script(keys=keys, args=args)
+            # Advance the durable cursor first. An uncertain enqueue must never be retried.
+            self.client.hset(PREFIX + 'checkpoints', source, checkpoint)
         except RedisError:
-            # Keep the same immutable Publication; next attempt can confirm ALREADY_COMMITTED.
             raise StorageError('REDIS_UNAVAILABLE') from None
-        if result not in {'OK', 'ALREADY_COMMITTED'}:
-            if result == 'COLLECTOR_LEASE_LOST':
-                self.ownership.valid = False
-            raise StorageError(result)
-        return result
+        if records:
+            try:
+                with self.client.pipeline(transaction=False) as pipe:
+                    for record in records:
+                        pipe.rpush(HTTP_QUEUE, record)
+                    pipe.ltrim(HTTP_QUEUE, -QUEUE_LIMIT, -1)
+                    pipe.execute()
+            except RedisError:
+                # The commands may have completed in part. Drop local delivery state.
+                return False
+        return True

@@ -1,19 +1,18 @@
-"""Per-source ten-second memory segments and immutable atomic publication."""
+"""Aggregate short in-memory HTTP windows and enqueue independent rows."""
 from dataclasses import dataclass, field, replace
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import signal
 import sys
 import threading
 import time
-import uuid
 
 from .aggregation import event_records, identity, merge
 from .algorithms import canonical
 from .parsing import Rejected, SHANGHAI, parse_observation
-from .protocol import MAX_BYTES, MAX_RECORDS, make_envelope
-from .storage import RedisStore, StorageError, Publication
+from .protocol import MAX_RECORDS
+from .storage import StorageError
 from .tailer import FileTailer, SourceError, checkpoint_json, restore_checkpoint
 
 
@@ -23,17 +22,12 @@ def now_iso():
 
 @dataclass
 class SourceState:
-    token: str
     reader: FileTailer
-    checkpoint: str | None
-    renewed_at: float
     rows: dict = field(default_factory=dict)
     day: str | None = None
-    batch_id: str | None = None
-    started_at: float | None = None
+    started_time: float | None = None
     end_checkpoint: str | None = None
     last_event: str = ''
-    publication: Publication | None = None
     diagnostics: dict = field(default_factory=dict)
     staged: deque = field(default_factory=deque)
 
@@ -49,87 +43,34 @@ class Collector:
         self.last_heartbeat = None
         self.diagnostic = diagnostic or (lambda value: None)
 
-    def _discard(self, source):
-        state = self.states.pop(source.alias, None)
-        if state is not None:
-            state.reader.close()
-
-    def _renew(self, source, state, force=False):
-        current = self.monotonic()
-        if force or current - state.renewed_at >= 10:
-            try:
-                self.store.lease('RENEW', source.alias, state.token)
-            except StorageError:
-                self._discard(source)
-                raise
-            state.renewed_at = current
-
     def _state(self, source):
         state = self.states.get(source.alias)
-        if state is not None:
-            self._renew(source, state)
-            return state
-        token = str(uuid.uuid4())
-        if not self.store.acquire(source.alias, token):
-            raise StorageError('LEASE_LOST')
-        try:
+        if state is None:
             encoded = self.store.checkpoint(source.alias)
             checkpoint = restore_checkpoint(encoded) if encoded is not None else None
             if checkpoint is None and not source.path.is_file():
                 raise SourceError()
-            reader = FileTailer(source.path, checkpoint, self.config.max_line_bytes)
-        except Exception:
-            self.store.lease('RELEASE', source.alias, token)
-            raise
-        state = SourceState(token, reader, encoded, self.monotonic())
-        self.states[source.alias] = state
+            state = SourceState(FileTailer(source.path, checkpoint, self.config.max_line_bytes))
+            self.states[source.alias] = state
         return state
 
     def prepare_sources(self):
-        """Acquire every source lease and open cursors before collecting."""
         for source in self.config.sources:
             self._state(source)
-
-    def renew_leases(self):
-        for source in self.config.sources:
-            state = self.states.get(source.alias)
-            if state is not None:
-                self._renew(source, state, force=True)
-
-    def release_leases(self):
-        for source in self.config.sources:
-            state = self.states.pop(source.alias, None)
-            if state is not None:
-                state.reader.close()
-                try:
-                    self.store.lease('RELEASE', source.alias, state.token)
-                except StorageError:
-                    pass
 
     def _flush(self, source, state):
         if state.end_checkpoint is None:
             return False
-        self._renew(source, state)
-        if state.publication is None:
-            now = self.clock()
-            envelope = make_envelope(state.batch_id, state.day, now, list(state.rows.values()),
-                                     source_id=source.alias)
-            state.publication = Publication(source.alias, state.token, state.checkpoint or '',
-                                            state.end_checkpoint, canonical(envelope).decode(),
-                                            state.batch_id, state.day, now, state.last_event)
-        try:
-            self.store.publish(state.publication)
-        except StorageError as exc:
-            if exc.code in {'LEASE_LOST', 'CHECKPOINT_CONFLICT'}:
-                self._discard(source)
-            raise
-        state.checkpoint = state.end_checkpoint
+        records = [canonical(dict(row, sourceId=source.alias)).decode() for row in state.rows.values()]
+        if not self.store.publish(source.alias, state.end_checkpoint, records):
+            self.diagnostic({'code': 'HTTP_QUEUE_DELIVERY_UNCERTAIN', 'sourceId': source.alias,
+                             'recordCount': len(records)})
         self.last_event = max(self.last_event, state.last_event)
         for reason, info in state.diagnostics.items():
             self.diagnostic({'code': reason, 'sourceId': source.alias, **info})
         state.rows.clear()
         state.diagnostics.clear()
-        state.day = state.batch_id = state.started_at = state.end_checkpoint = state.publication = None
+        state.day = state.started_time = state.end_checkpoint = None
         state.last_event = ''
         return True
 
@@ -141,24 +82,15 @@ class Collector:
                     self.step(source)
                 self._flush(source, state)
 
-    def _prospective(self, state, day, rows, now):
+    def _merge_rows(self, state, rows):
         merged = dict(state.rows)
         for row in rows:
             key = identity(row)
             merged[key] = merge(merged.get(key), row)
-        if len(merged) > MAX_RECORDS:
-            raise ValueError('RECORD_TOO_LARGE')
-        # All changed records were validated by merge; avoid re-running every schema per line.
-        # UUID/time widths are fixed; the placeholder preserves final UTF8 byte length.
-        envelope = {'schemaVersion': 2,
-                    'batchId': state.batch_id or '00000000-0000-4000-8000-000000000000',
-                    'businessDate': day, 'createdAt': now, 'records': list(merged.values())}
-        envelope['sourceId'] = 's' * 80
-        if len(canonical(envelope)) > MAX_BYTES:
-            raise ValueError('RECORD_TOO_LARGE')
         return merged
 
     def _stage(self, source, state):
+        cutoff = (datetime.fromisoformat(self.clock()).date() - timedelta(days=29)).isoformat()
         frames = []
         addresses = []
         started = self.monotonic()
@@ -167,7 +99,7 @@ class Collector:
                 candidate = state.reader.prepare()
                 if candidate is None:
                     break
-                now, event_at = self.clock(), ''
+                now, event_time = self.clock(), ''
                 day, event, address = now[:10], None, None
                 rows, reasons = [], []
                 if candidate.reason:
@@ -178,13 +110,15 @@ class Collector:
                 else:
                     try:
                         event, address = parse_observation(candidate.raw, self.config.privacy)
-                        day, event_at = event['business_date'], event['event_at']
-                        if not event['geo_internal']:
+                        day, event_time = event['business_date'], event['event_time']
+                        if day < cutoff or day > now[:10]:
+                            event = None
+                        elif not event['geo_internal']:
                             addresses.append(address)
                     except Rejected as exc:
                         reasons = [exc.reason]
                 # Retain sanitized event fields only; raw lines never enter staged memory.
-                frame = (replace(candidate, raw=None), now, day, event_at, event, address, rows, reasons)
+                frame = (replace(candidate, raw=None), now, day, event_time, event, address, rows, reasons)
                 frames.append(frame)
                 state.reader.acknowledge(candidate)
                 if candidate.before.generation != candidate.after.generation:
@@ -194,13 +128,13 @@ class Collector:
                 raise
         if not frames:
             return
-        budget = min(.300, max(0, 10 - (self.monotonic() - (state.started_at if state.started_at is not None else started))))
+        budget = min(.300, max(0, 10 - (self.monotonic() - (state.started_time if state.started_time is not None else started))))
         from .geo import fallback_outcome
         try:
             outcomes = self.geo.resolve_many(addresses, budget=budget) if self.geo is not None and addresses else {}
         except Exception:
             outcomes = {}
-        for candidate, now, day, event_at, event, address, rows, reasons in frames:
+        for candidate, now, day, event_time, event, address, rows, reasons in frames:
             if event is not None:
                 outcome = fallback_outcome(address) if event['geo_internal'] else outcomes.get(address, fallback_outcome(address))
                 event['region_code'] = outcome.region_code
@@ -208,49 +142,40 @@ class Collector:
                 event['quality'] = sorted(set(event['quality']) | set(outcome.quality))
                 rows = event_records(event)
                 reasons = event['quality']
-            state.staged.append((candidate, now, day, event_at, rows, reasons))
-        if frames and state.started_at is None:
-            state.started_at = started
+            state.staged.append((candidate, now, day, event_time, rows, reasons))
+        if frames and state.started_time is None:
+            state.started_time = started
 
     def step(self, source):
         state = self._state(source)
-        if state.publication is not None:
-            self._flush(source, state)  # uncertain result: retry identical bytes before reading any more.
-        if state.started_at is not None and self.monotonic() - state.started_at >= 10:
+        if state.started_time is not None and self.monotonic() - state.started_time >= 10:
             self._flush(source, state)
         if not state.staged:
             self._stage(source, state)
         if not state.staged:
             return False
-        candidate, now, day, event_at, rows, reasons = state.staged[0]
+        candidate, now, day, event_time, rows, reasons = state.staged[0]
         transition = candidate.before.generation != candidate.after.generation
         if state.day is not None and (state.day != day or transition):
             self._flush(source, state)
-        try:
-            prospective = self._prospective(state, day, rows, now)
-        except ValueError as exc:
-            if str(exc) != 'RECORD_TOO_LARGE':
-                raise
-            if state.end_checkpoint is not None:
-                self._flush(source, state)
-            try:
-                prospective = self._prospective(state, day, rows, now)
-            except ValueError:
-                raise StorageError('RECORD_TOO_LARGE') from None
+        prospective = self._merge_rows(state, rows)
+        if len(prospective) > MAX_RECORDS:
+            self._flush(source, state)
+            prospective = self._merge_rows(state, rows)
         if state.day is None:
-            state.day, state.batch_id = day, str(uuid.uuid4())
-            if state.started_at is None:
-                state.started_at = self.monotonic()
+            state.day = day
+            if state.started_time is None:
+                state.started_time = self.monotonic()
         state.rows = prospective
         state.end_checkpoint = checkpoint_json(candidate.after)
-        state.last_event = max(state.last_event, event_at)
+        state.last_event = max(state.last_event, event_time)
         for reason in reasons:
             info = state.diagnostics.setdefault(reason, {'generation': candidate.before.generation,
                                                          'offset': str(candidate.before.offset), 'count': '0'})
             info['count'] = str(int(info['count']) + 1)
         # This advances only the in-memory read cursor, NEVER the durable checkpoint.
         state.staged.popleft()
-        if transition or len(state.rows) == MAX_RECORDS or self.monotonic() - state.started_at >= 10:
+        if transition or len(state.rows) == MAX_RECORDS or self.monotonic() - state.started_time >= 10:
             self._flush(source, state)
         return True
 
@@ -270,9 +195,8 @@ class Collector:
         if self.last_heartbeat is not None:
             limits.append(max(0, self.last_heartbeat + 10 - current))
         for state in self.states.values():
-            limits.append(max(0, state.renewed_at + 10 - current))
-            if state.started_at is not None:
-                limits.append(max(0, state.started_at + 10 - current))
+            if state.started_time is not None:
+                limits.append(max(0, state.started_time + 10 - current))
         return min(limits)
 
     def close(self, flush=True):
@@ -286,16 +210,11 @@ class Collector:
                     while state.staged:
                         self.step(source)
                 if flush and state.end_checkpoint is not None:
-                    self._renew(source, state, force=True)
                     self._flush(source, state)
             except Exception as exc:
                 failure = failure or exc
             finally:
                 state.reader.close()
-                try:
-                    self.store.lease('RELEASE', source.alias, state.token)
-                except StorageError:
-                    pass  # only token-owned release; otherwise lease expires.
         self.states.clear()
         if failure is not None:
             raise failure

@@ -1,4 +1,4 @@
-"""Verify wheel assets and current golden batches from an isolated directory."""
+"""Verify wheel assets and current golden records from an isolated directory."""
 from pathlib import Path
 import subprocess
 import sys
@@ -24,11 +24,13 @@ with tempfile.TemporaryDirectory() as folder:
     code='''import sys,json
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
-from risk.protocol import verify_assets,validate_envelope
+from risk.protocol import verify_assets,validate_record
 from risk.parsing import PrivacyPolicy
 verify_assets()
 fixture=json.loads(Path(sys.argv[3]).read_text())
-validate_envelope(fixture['accessBatch'])
+record=fixture['accessRecord']
+assert record.pop('sourceId')
+validate_record(record)
 assert PrivacyPolicy().path('/api/token/private')==('/api/token/{redacted}','API')
 from risk.__main__ import main
 sys.argv=['risk','--check-file',sys.argv[2]]
@@ -36,4 +38,4 @@ assert main()==0
 '''
     result=subprocess.run([sys.executable,'-I','-c',code,str(root),str(sample),str(examples)],cwd=root,text=True,capture_output=True,check=True)
     assert result.stdout.strip()
-    print('Runtime-only wheel; isolated schemas, external current batches and entry point: PASS')
+    print('Runtime-only wheel; isolated schemas, external current records and entry point: PASS')

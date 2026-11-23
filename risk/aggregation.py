@@ -2,7 +2,7 @@
 from datetime import datetime
 from .protocol import validate_record, REQUEST_TYPES
 
-IDENTITY = ('requestType', 'minuteAt', 'method', 'pathTemplate', 'sourceIp', 'httpStatus')
+IDENTITY = ('requestType', 'minuteTime', 'method', 'pathTemplate', 'sourceIp', 'httpStatus')
 GEO_FIELDS = ('regionCode', 'countryCode', 'provinceCode', 'provinceName', 'cityCode', 'cityName')
 
 
@@ -15,7 +15,7 @@ def event_records(event):
     if request_type not in REQUEST_TYPES:
         request_type = 'OTHER'
     geo = event.get('geo', {})
-    row = {'minuteAt': datetime.fromisoformat(event['event_at']).replace(second=0, microsecond=0).isoformat(timespec='milliseconds'),
+    row = {'minuteTime': datetime.fromisoformat(event['event_time']).replace(second=0, microsecond=0).isoformat(timespec='milliseconds'),
            'method': event['method'], 'pathTemplate': event['path_template'], 'sourceIp': event['source_ip'],
            'httpStatus': event['status'], 'requestCount': '1', 'regionCode': event['region_code'],
            'requestType': request_type}

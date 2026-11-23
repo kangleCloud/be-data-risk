@@ -1,8 +1,6 @@
-"""Preview/reset only statistic keys, preserving checkpoints and all Geo data."""
+"""Preview or clear only the risk and GeoIP namespaces."""
 import argparse
 import json
-import re
-from datetime import date
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit, parse_qs
@@ -10,28 +8,7 @@ from urllib.parse import urlsplit, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from risk.config import load_config
 
-# Historical keys are only inspected here; protected configuration/checkpoints are never deleted.
-PATTERNS = ('risk:v1:days', 'risk:v1:day-key-ids', 'risk:v1:pending:*', 'risk:v1:batch:*',
-            'risk:v1:query:*', 'risk:v2:days', 'risk:v2:pending:*', 'risk:v2:batch:*',
-            'risk:monitor:v1:resource:pending:*', 'risk:monitor:v1:resource:sample:*')
-
-
-def candidate_key(key, pattern):
-    if pattern in {'risk:v1:days', 'risk:v1:day-key-ids', 'risk:v2:days'}:
-        return key == pattern
-    if pattern == 'risk:v1:query:*':
-        return key.startswith('risk:v1:query:') and len(key) > len('risk:v1:query:')
-    match = re.fullmatch(r'risk:v[12]:(pending|batch):(\d{4}-\d{2}-\d{2})(?::([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?', key)
-    if match:
-        try:
-            date.fromisoformat(match[2])
-        except ValueError:
-            return False
-        return (match[1] == 'pending' and match[3] is None) or (match[1] == 'batch' and match[3] is not None)
-    ident = r'[A-Za-z0-9_-]{1,80}'
-    uid = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-    return bool(re.fullmatch(r'risk:monitor:v1:resource:pending:' + ident, key)
-                or re.fullmatch(r'risk:monitor:v1:resource:sample:' + ident + ':' + uid, key))
+PATTERNS = ('risk:*', 'geoip:*')
 
 
 class RebuildError(ValueError):
@@ -69,30 +46,27 @@ def target_identity(url, *, public_target=False):
         raise RebuildError('INVALID_REBUILD_TARGET') from None
 
 
-def preview(client, *, batch_size=100, max_scan_calls=10000):
-    if not 1 <= batch_size <= 1000 or not 1 <= max_scan_calls <= 100000:
-        raise RebuildError('INVALID_REBUILD_LIMIT')
-    result = {'mode': 'DRY_RUN', 'candidates': {}, 'checkpoints': {}}
+def reset(client, *, execute=False, batch_size=100, max_scan_calls=10000):
+    candidates = {}
     calls = 0
     for pattern in PATTERNS:
         cursor = 0
-        count = 0
+        keys = set()
         while True:
             if calls >= max_scan_calls:
                 raise RebuildError('REBUILD_SCAN_LIMIT')
-            cursor, keys = client.scan(cursor=cursor, match=pattern, count=batch_size)
+            cursor, page = client.scan(cursor=cursor, match=pattern, count=batch_size)
             calls += 1
-            if any(not isinstance(key, str) or not key.startswith(pattern.rstrip('*')) for key in keys):
+            if any(not isinstance(key, str) or not key.startswith(pattern[:-1]) for key in page):
                 raise RebuildError('INVALID_REBUILD_SCAN')
-            count += sum(candidate_key(key, pattern) for key in keys)
+            keys.update(page)
             if int(cursor) == 0:
                 break
-        result['candidates'][pattern] = count
-    old = client.hgetall('risk:v1:checkpoints')
-    new = client.hgetall('risk:checkpoints')
-    result['checkpoints'] = {'oldCount': len(old), 'newCount': len(new),
-                             'conflicts': sum(key in new and new[key] != value for key, value in old.items())}
-    return result
+        candidates[pattern] = keys
+    counts = {}
+    for pattern, keys in candidates.items():
+        counts[pattern] = sum(client.delete(key) for key in keys) if execute else len(keys)
+    return {'mode': 'EXECUTED' if execute else 'DRY_RUN', 'counts': counts}
 
 
 def main(argv=None):
@@ -101,10 +75,14 @@ def main(argv=None):
     parser.add_argument('--target', required=True, help='Credential-free redis[s]://HOST:PORT/DB or unix socket URI; must match config')
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--max-scan-calls', type=int, default=10000)
+    parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--writers-stopped', action='store_true')
     args = parser.parse_args(argv)
     client = None
     try:
         # All confirmations and target checks precede even constructing a connection.
+        if args.execute and not args.writers_stopped:
+            raise RebuildError('REBUILD_WRITERS_NOT_CONFIRMED')
         if not 1 <= args.batch_size <= 1000 or not 1 <= args.max_scan_calls <= 100000:
             raise RebuildError('INVALID_REBUILD_LIMIT')
         config = load_config(args.config)
@@ -112,7 +90,7 @@ def main(argv=None):
             raise RebuildError('REBUILD_TARGET_MISMATCH')
         import redis
         client = redis.Redis.from_url(config.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
-        print(json.dumps(preview(client, batch_size=args.batch_size, max_scan_calls=args.max_scan_calls), sort_keys=True))
+        print(json.dumps(reset(client, execute=args.execute, batch_size=args.batch_size, max_scan_calls=args.max_scan_calls), sort_keys=True))
         return 0
     except RebuildError as error:
         print(json.dumps({'code': str(error)}), file=sys.stderr)
