@@ -6,10 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fakeredis
+from redis.exceptions import ConnectionError
 from risk.aggregation import event_records, merge
 from risk.config import Config, SourceConfig, load_config
 from risk.monitor import MonitorRuntime, _build_plan
-from risk.monitor_config import MonitorConfig, MonitorConfigSync, MonitorTarget, TargetConnection, parse_config
+from risk.monitor_config import (CONFIG_KEY, INITIALIZED_FIELD, MonitorConfig, MonitorConfigError,
+                                 MonitorConfigSync, MonitorTarget, TargetConnection, parse_config)
 from risk.parsing import PrivacyPolicy
 from risk.protocol import validate_record
 from risk.redis_keys import key_segment
@@ -39,16 +41,17 @@ class MonitorContractTest(unittest.TestCase):
         self.assertEqual(decrypt_binding(connection, 'AAAAAAAAAAAAAAAAAAAAAA==').password, 'risk-example')
 
     def test_current_remote_configuration_and_local_key(self):
-        payload = {'schemaVersion': 2, 'configVersion': '', 'generatedTime': '2026-11-19T12:00:00.000+08:00',
-                   'targets': [{'targetId': '1', 'type': 'REMOTE', 'enabled': True, 'collectorId': 'c',
-                                'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
-                                'username': 'monitor', 'passwordCiphertext': self.connection.password_ciphertext}},
-                               {'targetId': '2', 'type': 'REMOTE', 'enabled': False, 'collectorId': 'c',
-                                'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
-                                'username': 'monitor', 'passwordCiphertext': None}}]}
-        parsed = parse_config({'version': '', 'payload': json.dumps(payload), 'publishedTime': payload['generatedTime']})
+        target = {'targetId': '1', 'type': 'REMOTE', 'enabled': True, 'collectorId': 'c',
+                  'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
+                  'username': 'monitor', 'passwordCiphertext': self.connection.password_ciphertext}}
+        marker = {INITIALIZED_FIELD: '2026-11-19T12:00:00.000+08:00'}
+        parsed = parse_config({**marker, '1': json.dumps(target)})
         self.assertEqual(parsed.targets[0].connection.password_ciphertext, self.connection.password_ciphertext)
         self.assertNotIn(self.connection.password_ciphertext, repr(parsed))
+        with self.assertRaisesRegex(MonitorConfigError, 'CONFIG_INVALID'):
+            parse_config({**marker, '2': json.dumps(target)})
+        with self.assertRaisesRegex(MonitorConfigError, 'CONFIG_INVALID'):
+            parse_config({**marker, '1': json.dumps({**target, 'enabled': False})})
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / '.env.test'
             path.write_text('SM4_KEY=' + self.key + '\n')
@@ -79,40 +82,39 @@ class MonitorContractTest(unittest.TestCase):
         self.assertEqual(json.loads(sample.body)['configVersion'], '')
         scheduler.close()
 
-    def test_refresh_compares_targets_and_ignores_versions_and_timestamps(self):
+    def test_refresh_compares_targets_and_ignores_initialization_timestamp(self):
         with fakeredis.FakeRedis(decode_responses=True) as client:
             sync = MonitorConfigSync(client)
             target = {'targetId': '1', 'type': 'LOCAL', 'enabled': True,
                       'collectorId': 'c', 'intervalSeconds': 30, 'connection': None}
             now = '2026-11-19T12:00:00.000+08:00'
-            payload = {'schemaVersion': 2, 'configVersion': '9', 'generatedTime': now, 'targets': [target]}
-            client.hset('risk:monitor:config', mapping={'version': '9', 'payload': json.dumps(payload),
-                                                       'publishedTime': now})
+            client.hset(CONFIG_KEY, mapping={INITIALIZED_FIELD: now, '1': json.dumps(target)})
             self.assertTrue(sync.refresh(force=True))
             self.assertEqual(sync.current.targets[0].interval_seconds, 30)
 
             now = '2026-11-19T12:01:00.000+08:00'
-            payload.update(configVersion='', generatedTime=now)
-            client.hset('risk:monitor:config', mapping={'version': '', 'payload': json.dumps(payload),
-                                                       'publishedTime': now})
+            client.hset(CONFIG_KEY, INITIALIZED_FIELD, now)
             self.assertFalse(sync.refresh(force=True))
 
             target['intervalSeconds'] = 60
-            client.hset('risk:monitor:config', 'payload', json.dumps(payload))
+            client.hset(CONFIG_KEY, '1', json.dumps(target))
             self.assertTrue(sync.refresh(force=True))
             self.assertEqual(sync.current.targets[0].interval_seconds, 60)
 
-            client.hdel('risk:monitor:config', 'payload')
+            with patch.object(client, 'hgetall', side_effect=ConnectionError):
+                self.assertFalse(sync.refresh(force=True))
+            self.assertEqual(sync.status.error, 'CONFIG_UNAVAILABLE')
+            self.assertEqual(sync.current.targets[0].interval_seconds, 60)
+
+            client.hdel(CONFIG_KEY, INITIALIZED_FIELD)
             self.assertFalse(sync.refresh(force=True))
             self.assertEqual(sync.status.error, 'CONFIG_UNAVAILABLE')
             self.assertEqual(sync.current.targets[0].interval_seconds, 60)
 
-    def test_empty_snapshot_is_applied_without_a_version(self):
+    def test_initialized_hash_with_no_targets_is_applied(self):
         with fakeredis.FakeRedis(decode_responses=True) as client:
             now = '2026-11-19T12:00:00.000+08:00'
-            payload = {'schemaVersion': 2, 'configVersion': '', 'generatedTime': now, 'targets': []}
-            client.hset('risk:monitor:config', mapping={'version': '', 'payload': json.dumps(payload),
-                                                       'publishedTime': now})
+            client.hset(CONFIG_KEY, INITIALIZED_FIELD, now)
             runtime = MonitorRuntime(Config((), PrivacyPolicy(), 65536, collector_id='c'), client)
             try:
                 runtime.start()
@@ -120,6 +122,36 @@ class MonitorContractTest(unittest.TestCase):
                 self.assertEqual(status['configState'], 'APPLIED')
                 self.assertEqual(status['appliedConfigVersion'], '')
                 self.assertEqual(status['observedConfigVersion'], '')
+            finally:
+                runtime.close()
+
+    def test_remove_and_readd_one_target_keeps_other_target_scheduled(self):
+        with fakeredis.FakeRedis(decode_responses=True) as client:
+            clock = [0]
+            first = {'targetId': '1', 'type': 'LOCAL', 'enabled': True,
+                     'collectorId': 'c', 'intervalSeconds': 30, 'connection': None}
+            second = {**first, 'targetId': '2'}
+            client.hset(CONFIG_KEY, mapping={INITIALIZED_FIELD: '2026-11-19T12:00:00+08:00',
+                                            '1': json.dumps(first), '2': json.dumps(second)})
+            runtime = MonitorRuntime(Config((), PrivacyPolicy(), 65536, collector_id='c'), client,
+                                     monotonic=lambda: clock[0])
+            try:
+                runtime.start()
+                with patch.object(runtime.resources, 'tick', return_value=False):
+                    runtime.resources.next_due['2'] = 42
+                    client.hdel(CONFIG_KEY, '1')
+                    clock[0] = 5
+                    runtime.tick()
+                    self.assertEqual(set(runtime.resources.targets), {'2'})
+                    self.assertEqual(runtime.resources.next_due, {'2': 42})
+
+                    client.hset(CONFIG_KEY, '1', json.dumps({**first, 'intervalSeconds': 60}))
+                    clock[0] = 10
+                    runtime.tick()
+                    self.assertEqual(runtime.resources.targets['1'].interval_seconds, 60)
+                    self.assertEqual(runtime.resources.next_due, {'1': 10, '2': 42})
+                status = json.loads(client.hget('risk:heartbeat', 'monitor:' + key_segment('c')))
+                self.assertEqual(status['configState'], 'APPLIED')
             finally:
                 runtime.close()
 

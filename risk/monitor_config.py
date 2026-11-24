@@ -1,4 +1,4 @@
-"""Read complete monitor configuration snapshots from Redis."""
+"""Read per-target monitor configuration from Redis."""
 from dataclasses import dataclass, field
 from datetime import datetime
 import ipaddress
@@ -7,12 +7,12 @@ from redis.exceptions import RedisError
 
 from .parsing import Rejected, strict_json
 
-CONFIG_KEY = 'risk:monitor:config'
+CONFIG_KEY = 'risk:monitor:targets'
+INITIALIZED_FIELD = '@initialized'
 COLLECTOR_RE = re.compile(r'^[A-Za-z0-9_-]{1,80}$')
 TARGET_RE = re.compile(r'^[1-9][0-9]{0,18}$')
 USER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.-]{0,31}$')
 HOST_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
-MAX_TARGETS = 1000
 
 
 class MonitorConfigError(ValueError):
@@ -69,13 +69,12 @@ class MonitorTarget:
 
 @dataclass(frozen=True)
 class MonitorConfig:
-    published_time: str | None
+    initialized_time: str | None
     targets: tuple[MonitorTarget, ...] = ()
-    generated_time: str | None = None
 
     @property
     def empty(self):
-        return self.published_time is None
+        return self.initialized_time is None
 
     def by_id(self):
         return {target.target_id: target for target in self.targets}
@@ -118,7 +117,7 @@ def _target(value):
         raise MonitorConfigError()
     if len(target_id) == 19 and target_id > '9223372036854775807':
         raise MonitorConfigError()
-    if kind not in {'LOCAL', 'REMOTE'} or type(enabled) is not bool:
+    if kind not in ('LOCAL', 'REMOTE') or type(enabled) is not bool:
         raise MonitorConfigError()
     if not isinstance(collector_id, str) or not COLLECTOR_RE.fullmatch(collector_id):
         raise MonitorConfigError()
@@ -134,34 +133,28 @@ def _target(value):
 
 
 def parse_config(raw):
-    payload = raw.get('payload') if raw else None
-    if not isinstance(payload, str) or not payload:
+    if INITIALIZED_FIELD not in raw:
         raise MonitorConfigError('CONFIG_UNAVAILABLE')
-    # The scheduler may have published the new fields before removing old Hash fields.
-    if set(raw) - {'payload', 'publishedTime', 'version', 'publishedAt'}:
-        raise MonitorConfigError()
-    published = raw.get('publishedTime')
-    _time(published)
-    try:
-        value = strict_json(payload.encode('utf-8'))
-    except (Rejected, UnicodeError):
-        raise MonitorConfigError() from None
-    if set(value) - {'configVersion'} != {'schemaVersion', 'generatedTime', 'targets'}:
-        raise MonitorConfigError()
-    if type(value['schemaVersion']) is not int or value['schemaVersion'] != 2:
-        raise MonitorConfigError()
-    _time(value['generatedTime'])
-    entries = value['targets']
-    if not isinstance(entries, list) or len(entries) > MAX_TARGETS:
-        raise MonitorConfigError()
-    targets = tuple(_target(entry) for entry in entries)
-    if len({target.target_id for target in targets}) != len(targets):
-        raise MonitorConfigError()
-    return MonitorConfig(published, targets, value['generatedTime'])
+    initialized = raw[INITIALIZED_FIELD]
+    _time(initialized)
+    targets = []
+    for field, value in raw.items():
+        if field == INITIALIZED_FIELD:
+            continue
+        if not isinstance(value, str):
+            raise MonitorConfigError()
+        try:
+            target = _target(strict_json(value.encode('utf-8')))
+        except (Rejected, UnicodeError):
+            raise MonitorConfigError() from None
+        if field != target.target_id or not target.enabled:
+            raise MonitorConfigError()
+        targets.append(target)
+    return MonitorConfig(initialized, tuple(targets))
 
 
 class MonitorConfigSync:
-    """Read the complete snapshot periodically and retain the last good in-process value."""
+    """Poll target entries and retain the last good in-process configuration."""
 
     def __init__(self, client, poll_seconds=5):
         self.client = client
