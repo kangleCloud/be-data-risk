@@ -9,10 +9,11 @@ import fakeredis
 from risk.aggregation import event_records, merge
 from risk.config import Config, SourceConfig, load_config
 from risk.monitor import MonitorRuntime, _build_plan
-from risk.monitor_config import MonitorConfig, MonitorTarget, TargetConnection, parse_config
+from risk.monitor_config import MonitorConfig, MonitorConfigSync, MonitorTarget, TargetConnection, parse_config
 from risk.parsing import PrivacyPolicy
 from risk.protocol import validate_record
-from risk.resources import MetricsSnapshot, ResourceScheduler
+from risk.redis_keys import key_segment
+from risk.resources import MetricsSnapshot, ResourceScheduler, ResourceStore
 from risk.service import Collector
 from risk.ssh import SshBindingError, decrypt_binding
 from risk.storage import HTTP_QUEUE, RedisStore
@@ -38,14 +39,14 @@ class MonitorContractTest(unittest.TestCase):
         self.assertEqual(decrypt_binding(connection, 'AAAAAAAAAAAAAAAAAAAAAA==').password, 'risk-example')
 
     def test_current_remote_configuration_and_local_key(self):
-        payload = {'schemaVersion': 2, 'configVersion': '1', 'generatedTime': '2026-11-19T12:00:00.000+08:00',
+        payload = {'schemaVersion': 2, 'configVersion': '', 'generatedTime': '2026-11-19T12:00:00.000+08:00',
                    'targets': [{'targetId': '1', 'type': 'REMOTE', 'enabled': True, 'collectorId': 'c',
                                 'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
                                 'username': 'monitor', 'passwordCiphertext': self.connection.password_ciphertext}},
                                {'targetId': '2', 'type': 'REMOTE', 'enabled': False, 'collectorId': 'c',
                                 'intervalSeconds': 30, 'connection': {'host': 'example.test', 'port': 22,
                                 'username': 'monitor', 'passwordCiphertext': None}}]}
-        parsed = parse_config({'version': '1', 'payload': json.dumps(payload), 'publishedTime': payload['generatedTime']})
+        parsed = parse_config({'version': '', 'payload': json.dumps(payload), 'publishedTime': payload['generatedTime']})
         self.assertEqual(parsed.targets[0].connection.password_ciphertext, self.connection.password_ciphertext)
         self.assertNotIn(self.connection.password_ciphertext, repr(parsed))
         with tempfile.TemporaryDirectory() as folder:
@@ -58,7 +59,7 @@ class MonitorContractTest(unittest.TestCase):
     def test_local_and_disabled_targets_do_not_decrypt(self):
         local = MonitorTarget('1', 'LOCAL', True, 'c', 30, None)
         disabled = MonitorTarget('2', 'REMOTE', False, 'c', 30, self.connection)
-        monitor = MonitorConfig('1', '{}', '2026-01-01T00:00:00+08:00', (local, disabled))
+        monitor = MonitorConfig('2026-01-01T00:00:00+08:00', (local, disabled))
         with tempfile.TemporaryDirectory() as directory:
             source = SourceConfig('nginx_access', Path(directory) / 'access.log')
             config = Config((source,), PrivacyPolicy(), 65536, collector_id='c')
@@ -69,13 +70,80 @@ class MonitorContractTest(unittest.TestCase):
         runtime.config = config
         runtime.runner = None
         probe = type('Local', (), {'snapshot': lambda self: MetricsSnapshot()})()
-        scheduler = ResourceScheduler(None, 'c', '1', plan.monitor_targets,
+        scheduler = ResourceScheduler(None, 'c', plan.monitor_targets,
                                       local_probe=probe, remote_probe_factory=runtime._remote_probe,
                                       asynchronous=False)
         with patch('risk.monitor.decrypt_binding', side_effect=AssertionError('local must not decrypt')):
             sample, failure = scheduler.sample_target(local)
         self.assertIsNone(failure)
+        self.assertEqual(json.loads(sample.body)['configVersion'], '')
         scheduler.close()
+
+    def test_refresh_compares_targets_and_ignores_versions_and_timestamps(self):
+        with fakeredis.FakeRedis(decode_responses=True) as client:
+            sync = MonitorConfigSync(client)
+            target = {'targetId': '1', 'type': 'LOCAL', 'enabled': True,
+                      'collectorId': 'c', 'intervalSeconds': 30, 'connection': None}
+            now = '2026-11-19T12:00:00.000+08:00'
+            payload = {'schemaVersion': 2, 'configVersion': '9', 'generatedTime': now, 'targets': [target]}
+            client.hset('risk:monitor:config', mapping={'version': '9', 'payload': json.dumps(payload),
+                                                       'publishedTime': now})
+            self.assertTrue(sync.refresh(force=True))
+            self.assertEqual(sync.current.targets[0].interval_seconds, 30)
+
+            now = '2026-11-19T12:01:00.000+08:00'
+            payload.update(configVersion='', generatedTime=now)
+            client.hset('risk:monitor:config', mapping={'version': '', 'payload': json.dumps(payload),
+                                                       'publishedTime': now})
+            self.assertFalse(sync.refresh(force=True))
+
+            target['intervalSeconds'] = 60
+            client.hset('risk:monitor:config', 'payload', json.dumps(payload))
+            self.assertTrue(sync.refresh(force=True))
+            self.assertEqual(sync.current.targets[0].interval_seconds, 60)
+
+            client.hdel('risk:monitor:config', 'payload')
+            self.assertFalse(sync.refresh(force=True))
+            self.assertEqual(sync.status.error, 'CONFIG_UNAVAILABLE')
+            self.assertEqual(sync.current.targets[0].interval_seconds, 60)
+
+    def test_empty_snapshot_is_applied_without_a_version(self):
+        with fakeredis.FakeRedis(decode_responses=True) as client:
+            now = '2026-11-19T12:00:00.000+08:00'
+            payload = {'schemaVersion': 2, 'configVersion': '', 'generatedTime': now, 'targets': []}
+            client.hset('risk:monitor:config', mapping={'version': '', 'payload': json.dumps(payload),
+                                                       'publishedTime': now})
+            runtime = MonitorRuntime(Config((), PrivacyPolicy(), 65536, collector_id='c'), client)
+            try:
+                runtime.start()
+                status = json.loads(client.hget('risk:heartbeat', 'monitor:' + key_segment('c')))
+                self.assertEqual(status['configState'], 'APPLIED')
+                self.assertEqual(status['appliedConfigVersion'], '')
+                self.assertEqual(status['observedConfigVersion'], '')
+            finally:
+                runtime.close()
+
+    def test_target_change_discards_old_inflight_sample(self):
+        with fakeredis.FakeRedis(decode_responses=True) as client:
+            original = MonitorTarget('1', 'LOCAL', True, 'c', 30, None)
+            edited = MonitorTarget('1', 'LOCAL', True, 'c', 60, None)
+            probe = type('Local', (), {'snapshot': lambda self: MetricsSnapshot(memory_used=1, memory_total=2)})()
+            scheduler = ResourceScheduler(ResourceStore(client), 'c', [original], local_probe=probe, asynchronous=True)
+            key = 'risk:monitor:resource:current:1'
+            try:
+                scheduler.tick()
+                scheduler.update_config([edited])
+                scheduler.inflight['1'][1].result(timeout=3)
+                scheduler.tick()
+                self.assertIsNone(client.get(key))
+
+                # Republishing identical settings leaves this new sample valid.
+                scheduler.update_config([MonitorTarget('1', 'LOCAL', True, 'c', 60, None)])
+                scheduler.inflight['1'][1].result(timeout=3)
+                scheduler.tick()
+                self.assertEqual(json.loads(client.get(key))['memoryUsedBytes'], '1')
+            finally:
+                scheduler.close()
 
     def test_logs_start_without_monitor_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -91,7 +159,7 @@ class MonitorContractTest(unittest.TestCase):
                 runtime.start()
                 runtime.tick()
                 self.assertEqual(runtime.applied_sources, ('nginx_access',))
-                self.assertIsNone(runtime.applied_version)
+                self.assertFalse(runtime.config_applied)
                 runtime.close()
                 self.assertEqual(client.llen(HTTP_QUEUE), 1)
             finally:

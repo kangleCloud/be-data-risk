@@ -12,14 +12,13 @@ from risk.resources import MetricsSnapshot, ResourceScheduler, ResourceStore
 def export():
     client = fakeredis.FakeRedis(decode_responses=True)
     try:
-        client.hset('risk:monitor:config', mapping={'version': '42'})
         target = MonitorTarget('7', 'LOCAL', True, 'collector-v2', 30, None)
         class Probe:
             def snapshot(self):
                 return MetricsSnapshot(cpu_total=100, cpu_idle=40, memory_used=1024, memory_total=2048,
                                        disk_used=4096, disk_total=8192, net_receive=1000, net_transmit=2000,
                                        load1='0.5', uptime_seconds=60, boot_id='synthetic')
-        scheduler = ResourceScheduler(ResourceStore(client), 'collector-v2', '42', [target],
+        scheduler = ResourceScheduler(ResourceStore(client), 'collector-v2', [target],
                                       clock=lambda: '2026-11-19T10:00:00.000+08:00', local_probe=Probe())
         scheduler.tick()
         key = 'risk:monitor:resource:current:7'

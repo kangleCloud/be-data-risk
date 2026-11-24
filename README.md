@@ -29,7 +29,9 @@ Geo 内部接口示例为 `http://127.0.0.1:19004/scheduler/api/internal/risk/ge
 
 HTTP 分钟记录写入 `risk:http:pending`，检查点保存在 `risk:checkpoints`；其他键为 `risk:heartbeat`、`risk:monitor:config`、`risk:monitor:resource:current:{targetId}` 及 `geoip:*`。时间字段使用 `xxxTime`，配置与资源协议为 schemaVersion 2。
 
-日志读取支持半行、轮转和截断。按最多 10 秒或 500 条聚合记录定期交付。先写检查点，入队失败不重投。每个采集器 ID 和每个日志来源只部署一个实例。资源样本使用带 TTL 的普通 SET，SSH 继续严格验证主机密钥。
+实时 QPS 的日志计数写入 `risk:http:qps:{epochMinute}`，分钟编号为 Unix 秒除以 60 取整。每条有效访问记录计一次，和检查点原子提交。持续采集期间，在分钟结束后所有日志源已追到文件末尾且计数已提交时，写入 `ready=1`；只有该标记存在时，缺少 `requestCount` 才代表零请求。分钟键在该分钟结束 10 分钟后过期，有效期内可接收迟到日志。
+
+日志读取支持半行、轮转和截断。按最多 10 秒或 500 条聚合记录定期交付。提交检查点和 QPS 计数后再写历史队列，历史入队失败不重投。运行中若 Redis 丢失已知检查点，恢复游标并跳过待提交批次，让受影响的分钟保持不可用，防止旧计数仍在时重复累计。每个采集器 ID 和每个日志来源只部署一个实例。资源样本使用带 TTL 的普通 SET，SSH 继续严格验证主机密钥。
 
 ## 切换预览
 

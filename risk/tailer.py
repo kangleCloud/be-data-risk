@@ -63,6 +63,7 @@ class FileTailer:
         self.handle = None
         self.checkpoint = checkpoint
         self.pending = None
+        self.at_end = False
 
     def close(self):
         if self.handle is not None:
@@ -96,6 +97,7 @@ class FileTailer:
         raise SourceError()
 
     def prepare(self):
+        self.at_end = False
         try:
             return self._prepare()
         except OSError:
@@ -150,6 +152,7 @@ class FileTailer:
             self.pending = Candidate(before, after, reason='ROTATED_PARTIAL_LINE' if raw else 'SOURCE_ROTATED')
             return self.pending
         # Incomplete line: retain its starting offset and retry on append/restart.
+        self.at_end = not raw
         return None
 
     def acknowledge(self, candidate):

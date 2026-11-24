@@ -20,12 +20,12 @@ def export():
         path.write_text('')
         config = Config((SourceConfig('nginx-v1', path),), PrivacyPolicy(), 65536,
                         collector_id='collector-v2')
-        payload = {'schemaVersion': 2, 'configVersion': '42',
+        payload = {'schemaVersion': 2, 'configVersion': '',
                    'generatedTime': '2026-11-19T10:00:00.000+08:00',
                    'targets': [{'targetId': '1', 'type': 'LOCAL', 'enabled': True,
                                 'collectorId': 'collector-v2', 'intervalSeconds': 30,
                                 'connection': None}]}
-        client.hset('risk:monitor:config', mapping={'version': '42', 'payload': canonical(payload).decode(),
+        client.hset('risk:monitor:config', mapping={'version': '', 'payload': canonical(payload).decode(),
                                                    'publishedTime': payload['generatedTime']})
         runtime = MonitorRuntime(config, client)
         try:

@@ -1,16 +1,15 @@
-"""Versioned complete monitor configuration from Redis; no local configuration cache."""
+"""Read complete monitor configuration snapshots from Redis."""
 from dataclasses import dataclass, field
 from datetime import datetime
 import ipaddress
 import re
 from redis.exceptions import RedisError
 
-from .parsing import Rejected, strict_json, SHANGHAI
+from .parsing import Rejected, strict_json
 
 CONFIG_KEY = 'risk:monitor:config'
 COLLECTOR_RE = re.compile(r'^[A-Za-z0-9_-]{1,80}$')
 TARGET_RE = re.compile(r'^[1-9][0-9]{0,18}$')
-VERSION_RE = re.compile(r'^(?:0|[1-9][0-9]{0,19})$')
 USER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.-]{0,31}$')
 HOST_RE = re.compile(r'^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
 MAX_TARGETS = 1000
@@ -20,15 +19,6 @@ class MonitorConfigError(ValueError):
     def __init__(self, code='CONFIG_INVALID'):
         self.code = code
         super().__init__(code)
-
-
-def decimal_compare(left, right):
-    """Compare non-negative decimal strings without float conversion."""
-    if not isinstance(left, str) or not isinstance(right, str) or not VERSION_RE.fullmatch(left) or not VERSION_RE.fullmatch(right):
-        raise ValueError('INVALID_DECIMAL')
-    if len(left) != len(right):
-        return -1 if len(left) < len(right) else 1
-    return (left > right) - (left < right)
 
 
 def _time(value):
@@ -79,15 +69,13 @@ class MonitorTarget:
 
 @dataclass(frozen=True)
 class MonitorConfig:
-    version: str | None
-    payload: str | None = field(repr=False)
     published_time: str | None
     targets: tuple[MonitorTarget, ...] = ()
     generated_time: str | None = None
 
     @property
     def empty(self):
-        return self.version is None and not self.targets
+        return self.published_time is None
 
     def by_id(self):
         return {target.target_id: target for target in self.targets}
@@ -97,16 +85,14 @@ class MonitorConfig:
                      if target.collector_id == collector_id and (target.enabled or not enabled_only))
 
 
-EMPTY_CONFIG = MonitorConfig(None, None, None, ())
+EMPTY_CONFIG = MonitorConfig(None)
 
 
 @dataclass
 class ConfigStatus:
     config: MonitorConfig | None = None
-    loaded: bool = False
     stale: bool = False
     error: str | None = None
-    conflict: bool = False
 
 
 def _connection(value):
@@ -148,28 +134,21 @@ def _target(value):
 
 
 def parse_config(raw):
-    if not raw:
+    payload = raw.get('payload') if raw else None
+    if not isinstance(payload, str) or not payload:
         raise MonitorConfigError('CONFIG_UNAVAILABLE')
-    if set(raw) != {'version', 'payload', 'publishedTime'}:
+    # The scheduler may have published the new fields before removing old Hash fields.
+    if set(raw) - {'payload', 'publishedTime', 'version', 'publishedAt'}:
         raise MonitorConfigError()
-    version, payload, published = raw['version'], raw['payload'], raw['publishedTime']
-    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
-        raise MonitorConfigError()
-    if not isinstance(published, str):
-        raise MonitorConfigError()
+    published = raw.get('publishedTime')
     _time(published)
-    if not isinstance(payload, str) or payload == '':
-        # A missing or empty payload is unavailable, not a valid empty snapshot.
-        raise MonitorConfigError('CONFIG_UNAVAILABLE')
     try:
         value = strict_json(payload.encode('utf-8'))
     except (Rejected, UnicodeError):
         raise MonitorConfigError() from None
-    if set(value) != {'schemaVersion', 'configVersion', 'generatedTime', 'targets'}:
+    if set(value) - {'configVersion'} != {'schemaVersion', 'generatedTime', 'targets'}:
         raise MonitorConfigError()
     if type(value['schemaVersion']) is not int or value['schemaVersion'] != 2:
-        raise MonitorConfigError()
-    if value['configVersion'] != version:
         raise MonitorConfigError()
     _time(value['generatedTime'])
     entries = value['targets']
@@ -178,74 +157,41 @@ def parse_config(raw):
     targets = tuple(_target(entry) for entry in entries)
     if len({target.target_id for target in targets}) != len(targets):
         raise MonitorConfigError()
-    return MonitorConfig(version, payload, published, targets, value['generatedTime'])
+    return MonitorConfig(published, targets, value['generatedTime'])
 
 
 class MonitorConfigSync:
     """Read the complete snapshot periodically and retain the last good in-process value."""
 
-    def __init__(self, client, clock=None, poll_seconds=5):
+    def __init__(self, client, poll_seconds=5):
         self.client = client
         self.status = ConfigStatus()
         self.poll_seconds = poll_seconds
-        self.clock = clock or (lambda: datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
         self.last_read_time = 0.0
-        self.observed_version = None
 
     @property
     def current(self):
         return self.status.config or EMPTY_CONFIG
 
-    def _now(self):
-        return self.clock()
-
     def refresh(self, monotonic_now=None, force=False):
         if not force and monotonic_now is not None and monotonic_now - self.last_read_time < self.poll_seconds:
             return False
-        python_now = monotonic_now
-        self.last_read_time = python_now if python_now is not None else self.last_read_time
+        if monotonic_now is not None:
+            self.last_read_time = monotonic_now
         try:
             raw = self.client.hgetall(CONFIG_KEY)
         except RedisError:
             self.status.stale = True
             self.status.error = 'CONFIG_UNAVAILABLE'
-            self.status.conflict = False
             return False
         try:
             candidate = parse_config(raw)
         except MonitorConfigError as exc:
             self.status.stale = True
             self.status.error = exc.code
-            self.status.conflict = False
             return False
-        self.observed_version = candidate.version
         previous = self.status.config
-        if previous is None:
-            self.status.config = candidate
-            self.status.loaded = True
-            self.status.stale = False
-            self.status.error = None
-            self.status.conflict = False
-            return True
-        order = decimal_compare(candidate.version, previous.version)
-        if order < 0:
-            self.status.stale = True
-            self.status.error = 'CONFIG_VERSION_OUTDATED'
-            self.status.conflict = False
-            return False
-        if order == 0:
-            if candidate.payload != previous.payload:
-                self.status.stale = True
-                self.status.error = 'CONFIG_VERSION_CONFLICT'
-                self.status.conflict = True
-                return False
-            self.status.stale = False
-            self.status.error = None
-            self.status.conflict = False
-            return False
         self.status.config = candidate
-        self.status.loaded = True
         self.status.stale = False
         self.status.error = None
-        self.status.conflict = False
-        return True
+        return previous is None or candidate.by_id() != previous.by_id()
