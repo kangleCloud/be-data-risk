@@ -13,7 +13,7 @@ cp .env.example .env.prod
 .venv/bin/python -m risk --config .env.prod
 ```
 
-在私有 `.env.prod` 中配置 Redis、`COLLECTOR_ID`、可信代理、本地日志源及 Geo。远程资源采集还需设置 `SM4_KEY`，其值为 Java 原有 `Sm4Utils` 的 16 字节 UTF-8 密钥的 Base64 编码；不要提交密钥。Java 将加密后的 SSH 密码随监控配置快照发布到 Redis，Python 仅在启用远程目标采样时解密。LOCAL 直接采集，不读取密码。Nginx 日志按本机日志源采集，不依赖资源监控目标的启停或配置快照。
+在私有 `.env.prod` 中配置 Redis、`COLLECTOR_ID`、可信代理、本地日志源及 Geo。远程资源采集还需设置 `SM4_KEY`，其值为 Java 原有 `Sm4Utils` 的 16 字节 UTF-8 密钥的 Base64 编码。密钥仅保存在私有配置中。Java 将加密后的 SSH 密码随单个监控目标配置写入 Redis，Python 仅在启用远程目标采样时解密。LOCAL 直接采集。Nginx 日志按本机日志源采集，独立于监控目标配置。
 
 旧私有配置如含 `SSH_SERVERS`（JSON 格式为 `sshServers`），需自行移除旧字段后再启动；程序不会自动修改私有配置。
 
@@ -27,9 +27,11 @@ Geo 内部接口示例为 `http://127.0.0.1:19004/scheduler/api/internal/risk/ge
 
 所有完成请求归 `API/PAGE/STATIC/OTHER`；SSE 完成日志计入 OTHER，不表示连接数。风控及内部 Geo 请求计数，内部 Geo 请求不再发起 Geo 解析。路径去参数并脱敏，不保存原始日志、请求体或认证信息。资源样本将缺失值置 null，按 `cpu/memory/disk/networkRate/load/uptime` 记录固定原因。
 
-HTTP 分钟记录写入 `risk:http:pending`，检查点保存在 `risk:checkpoints`；其他键为 `risk:heartbeat`、`risk:monitor:config`、`risk:monitor:resource:current:{targetId}` 及 `geoip:*`。时间字段使用 `xxxTime`，配置与资源协议为 schemaVersion 2。
+HTTP 分钟记录写入 `risk:http:pending`，检查点保存在 `risk:checkpoints`。其他键为 `risk:heartbeat`、`risk:monitor:targets`、`risk:monitor:resource:current:{targetId}` 及 `geoip:*`。心跳与资源协议使用 `schemaVersion: 2`。升级采集器前，先由 Java 初始化 `risk:monitor:targets`。
 
-日志读取支持半行、轮转和截断。按最多 10 秒或 500 条聚合记录定期交付。先写检查点，入队失败不重投。每个采集器 ID 和每个日志来源只部署一个实例。资源样本使用带 TTL 的普通 SET，SSH 继续严格验证主机密钥。
+实时 QPS 的日志计数写入 `risk:http:qps:{epochMinute}`，分钟编号为 Unix 秒除以 60 取整。每条有效访问记录计一次，和检查点原子提交。持续采集期间，在分钟结束后所有日志源已追到文件末尾且计数已提交时，写入 `ready=1`；只有该标记存在时，缺少 `requestCount` 才代表零请求。分钟键在该分钟结束 10 分钟后过期，有效期内可接收迟到日志。
+
+日志读取支持半行、轮转和截断。按最多 10 秒或 500 条聚合记录定期交付。提交检查点和 QPS 计数后再写历史队列，历史入队失败不重投。运行中若 Redis 丢失已知检查点，恢复游标并跳过待提交批次，让受影响的分钟保持不可用，防止旧计数仍在时重复累计。每个采集器 ID 和每个日志来源只部署一个实例。资源样本使用带 TTL 的普通 SET，SSH 继续严格验证主机密钥。
 
 ## 切换预览
 

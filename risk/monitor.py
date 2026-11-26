@@ -26,7 +26,7 @@ class MonitorRuntimeError(RuntimeError):
 
 @dataclass(frozen=True)
 class LocalPlan:
-    version: str | None
+    has_config: bool
     sources: tuple[SourceConfig, ...]
     signature: tuple
     monitor_targets: tuple = ()
@@ -36,7 +36,7 @@ def _build_plan(config, monitor):
     targets = monitor.for_collector(config.collector_id)
     sources = config.sources
     signature = tuple((source.alias, str(source.path)) for source in sources)
-    return LocalPlan(monitor.version, sources, signature, targets)
+    return LocalPlan(not monitor.empty, sources, signature, targets)
 
 
 class MonitorRuntime:
@@ -63,16 +63,15 @@ class MonitorRuntime:
         self.last_sync_error = None
         self.last_status = None
         self.last_status_time = None
-        self.applied_version = None
+        self.config_applied = False
         self.applied_sources = ()
         self.apply_error = None
 
     def _publish_status(self, force=False):
         from redis.exceptions import RedisError
         status = self.sync.status
-        observed = self.sync.observed_version
         config_error = self.apply_error or status.error
-        if self.applied_version is None:
+        if not self.config_applied:
             state = 'UNAVAILABLE'
         elif status.stale or self.apply_error or self.pending_plan is not None:
             state = 'STALE'
@@ -80,8 +79,8 @@ class MonitorRuntime:
             state = 'APPLIED'
         value = {'schemaVersion': 2, 'collectorId': self.config.collector_id,
                  'updatedTimeMillis': '0',
-                 'configState': state, 'appliedConfigVersion': self.applied_version,
-                 'observedConfigVersion': observed, 'configError': config_error,
+                 'configState': state, 'appliedConfigVersion': '',
+                 'observedConfigVersion': '', 'configError': config_error,
                  'sources': [{'sourceId': source,
                               'coverageFromMillis': None, 'coverageThroughMillis': None,
                               'continuity': 'UNKNOWN'} for source in sorted(self.applied_sources)]}
@@ -139,14 +138,14 @@ class MonitorRuntime:
         self._restart(plan)
         if self.resources is None:
             self.resources = ResourceScheduler(
-                ResourceStore(self.client), self.config.collector_id, plan.version or '0',
+                ResourceStore(self.client), self.config.collector_id,
                 plan.monitor_targets, clock=self.clock,
                 monotonic=self.monotonic, remote_probe_factory=self._remote_probe,
                 local_probe=self.local_probe, diagnostic=self.diagnostic, asynchronous=True)
         else:
-            self.resources.update_config(plan.version or '0', plan.monitor_targets)
+            self.resources.update_config(plan.monitor_targets)
         self.pending_plan = None
-        self.applied_version = plan.version
+        self.config_applied = plan.has_config
         self.applied_sources = tuple(source.alias for source in plan.sources)
         self.apply_error = None
 
@@ -159,13 +158,6 @@ class MonitorRuntime:
             self.apply_error = exc.code
             self._publish_status(force=True)
             raise MonitorRuntimeError(exc.code) from None
-        # Create independent delivery workers even for an empty valid config.
-        if self.resources is None:
-            self.resources = ResourceScheduler(
-                ResourceStore(self.client), self.config.collector_id, plan.version or '0', (),
-                clock=self.clock, monotonic=self.monotonic,
-                remote_probe_factory=self._remote_probe, local_probe=self.local_probe,
-                diagnostic=self.diagnostic, asynchronous=True)
         self._activate(plan)
         self._publish_status(force=True)
 
@@ -179,10 +171,9 @@ class MonitorRuntime:
             return
         if plan.signature == self.local_signature:
             if self.resources is not None:
-                self.resources.update_config(plan.version or '0',
-                                             tuple(target for target in self.sync.current.for_collector(self.config.collector_id)))
+                self.resources.update_config(plan.monitor_targets)
             self.pending_plan = None
-            self.applied_version = plan.version
+            self.config_applied = plan.has_config
             self.applied_sources = tuple(source.alias for source in plan.sources)
             self.apply_error = None
             return

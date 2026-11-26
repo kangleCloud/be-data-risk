@@ -26,8 +26,10 @@ from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from risk.protocol import verify_assets,validate_record
 from risk.parsing import PrivacyPolicy
+from risk.resources import validate_sample
 verify_assets()
 fixture=json.loads(Path(sys.argv[3]).read_text())
+validate_sample(fixture['resourceSample'])
 record=fixture['accessRecord']
 assert record.pop('sourceId')
 validate_record(record)

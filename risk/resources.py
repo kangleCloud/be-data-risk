@@ -234,7 +234,7 @@ class Sample:
     body: str
 
 
-def build_sample(target, collector_id, config_version, sampled_time, snapshot, previous=None, elapsed=None,
+def build_sample(target, collector_id, sampled_time, snapshot, previous=None, elapsed=None,
                  failure=None):
     reasons = {}
     boot_changed = bool(previous and snapshot.boot_id and previous[0].boot_id
@@ -297,7 +297,7 @@ def build_sample(target, collector_id, config_version, sampled_time, snapshot, p
     status = 'FAILED' if not any(value is not None for value in present) else ('PARTIAL' if reasons else 'SUCCEEDED')
     body = {
         'schemaVersion': 2, 'targetId': target.target_id,
-        'collectorId': collector_id, 'configVersion': config_version, 'sampledTime': sampled_time, 'writtenTimeMillis': '0',
+        'collectorId': collector_id, 'configVersion': '', 'sampledTime': sampled_time, 'writtenTimeMillis': '0',
         'status': status, 'cpuPercent': cpu,
         'memoryUsedBytes': memory_used, 'memoryTotalBytes': memory_total,
         'diskUsedBytes': disk_used, 'diskTotalBytes': disk_total,
@@ -340,12 +340,11 @@ class ResourceStore:
 
 
 class ResourceScheduler:
-    def __init__(self, store, collector_id, config_version, targets, *, clock=None,
+    def __init__(self, store, collector_id, targets, *, clock=None,
                  monotonic=time.monotonic, local_probe=None, remote_probe_factory=None, diagnostic=None,
                  asynchronous=False, max_workers=4):
         self.store = store
         self.collector_id = collector_id
-        self.config_version = config_version
         self.clock = clock or (lambda: datetime.now(SHANGHAI).isoformat(timespec='milliseconds'))
         self.monotonic = monotonic
         self.local_probe = local_probe or LocalProbe()
@@ -355,20 +354,22 @@ class ResourceScheduler:
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='risk-resource') if asynchronous else None
         self.max_workers = max_workers
         self.inflight = {}
-        self.update_config(config_version, targets)
+        self.update_config(targets)
 
-    def update_config(self, config_version, targets):
-        self.config_version = config_version
+    def update_config(self, targets):
         active = {target.target_id: target for target in targets if target.enabled}
         now = self.monotonic()
         for target_id, target in active.items():
-            old = self.targets.get(target_id)
-            if old is None or (old.type, old.interval_seconds, old.connection) != (target.type, target.interval_seconds, target.connection):
+            if self.targets.get(target_id) != target:
                 self.next_due[target_id] = now
                 self.previous.pop(target_id, None)
         for target_id in self.targets.keys() - active.keys():
             self.next_due.pop(target_id, None)
             self.previous.pop(target_id, None)
+        for target_id, (target, future) in self.inflight.items():
+            if target != active.get(target_id):
+                # Let the worker finish, but discard its result after a target change.
+                self.inflight[target_id] = (None, future)
         self.targets = active
 
     def _probe(self, target):
@@ -378,8 +379,7 @@ class ResourceScheduler:
             raise ProbeFailure('SSH_BINDING_UNAVAILABLE')
         return self.remote_probe_factory(target)
 
-    def sample_target(self, target, config_version=None):
-        config_version = self.config_version if config_version is None else config_version
+    def sample_target(self, target):
         sampled_time = self.clock()
         now = self.monotonic()
         previous = self.previous.get(target.target_id)
@@ -388,14 +388,14 @@ class ResourceScheduler:
             snapshot = self._probe(target).snapshot()
         except ProbeFailure as exc:
             self.previous.pop(target.target_id, None)
-            return build_sample(target, self.collector_id, config_version, sampled_time,
+            return build_sample(target, self.collector_id, sampled_time,
                                 MetricsSnapshot(), None, None, exc.code), exc.code
         except Exception:
             self.previous.pop(target.target_id, None)
-            return build_sample(target, self.collector_id, config_version, sampled_time,
+            return build_sample(target, self.collector_id, sampled_time,
                                 MetricsSnapshot(), None, None, 'SAMPLE_FAILED'), 'SAMPLE_FAILED'
         self.previous[target.target_id] = (snapshot, now)
-        return build_sample(target, self.collector_id, config_version, sampled_time,
+        return build_sample(target, self.collector_id, sampled_time,
                             snapshot, previous, elapsed), None
 
     def _deliver(self, target, sample, failure):
@@ -410,11 +410,11 @@ class ResourceScheduler:
     def tick(self):
         """Publish only current samples; failed writes are dropped until the next cycle."""
         progress = False
-        for target_id, (target, version, future) in list(self.inflight.items()):
+        for target_id, (target, future) in list(self.inflight.items()):
             if not future.done():
                 continue
             self.inflight.pop(target_id)
-            if self.targets.get(target_id) != target or self.config_version != version:
+            if target is None:
                 self.previous.pop(target_id, None)
                 continue
             sample, failure = future.result()
@@ -425,8 +425,7 @@ class ResourceScheduler:
                 continue
             if self.executor is not None:
                 if len(self.inflight) < self.max_workers:
-                    version = self.config_version
-                    self.inflight[target_id] = (target, version, self.executor.submit(self.sample_target, target, version))
+                    self.inflight[target_id] = (target, self.executor.submit(self.sample_target, target))
                     progress = True
             else:
                 sample, failure = self.sample_target(target)
